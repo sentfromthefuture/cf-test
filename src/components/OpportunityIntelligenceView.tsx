@@ -310,7 +310,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 Target Customer Persona (Who Experiences It)
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                {isGated ? 'The full customer persona profile is included in the Pro plan.' : opportunity.targetPersona}
+                {opportunity.targetPersona}
               </p>
             </div>
 
@@ -396,9 +396,9 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
             </div>
           </div>
 
-          <div className={`space-y-4 ${activePlan === 'Free' ? 'blur-xs select-none pointer-events-none' : ''}`}>
-            {activePlan === 'Starter' && (
-              <p className="text-[11px] text-amber-300">Starter shows a limited competitor view. Upgrade to Pro for the full vulnerability matrix.</p>
+          <div className="space-y-4">
+            {(activePlan === 'Free' || activePlan === 'Starter') && (
+              <p className="text-[11px] text-amber-300">{activePlan === 'Free' ? 'Free shows a 1-competitor preview.' : 'Starter shows 2 competitors per opportunity.'} Upgrade to Pro for the full vulnerability matrix.</p>
             )}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
               <div className="flex items-center justify-between">
@@ -414,7 +414,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {(activePlan === 'Starter' ? opportunity.competitors.slice(0, 1) : opportunity.competitors).map((comp, idx) => (
+                {opportunity.competitors.slice(0, activePlan === 'Free' ? 1 : activePlan === 'Starter' ? 2 : undefined).map((comp, idx) => (
                   <div key={idx} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                       <span className="font-bold text-white text-sm">{comp.name}</span>
@@ -446,34 +446,6 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
             </div>
           </div>
 
-          {/* Gated Overlay */}
-          {activePlan === 'Free' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-slate-950/85 backdrop-blur-sm rounded-2xl border border-amber-500/30">
-              <div className="h-12 w-12 rounded-full bg-amber-500/20 border border-amber-500/50 flex items-center justify-center text-amber-400 mb-3 shadow-lg">
-                <Lock className="h-6 w-6" />
-              </div>
-              <h3 className="text-base font-bold text-white mb-1">
-                Detailed Competitor Vulnerability Matrix is Gated
-              </h3>
-              <p className="text-xs text-slate-300 max-w-md mb-4">
-                Pro subscribers get complete teardowns of competitor pricing, fatal UX bugs reported on G2/Trustpilot, and exact positioning wedges.
-              </p>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => {
-                    if (onOpenPayment) {
-                      onOpenPayment('Pro');
-                    } else {
-                      onOpenPricing();
-                    }
-                  }}
-                  className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-all cursor-pointer shadow-md"
-                >
-                  Upgrade to Pro ($29/mo)
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       )}
 

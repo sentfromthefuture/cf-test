@@ -1,4 +1,3 @@
-import { Lock as LockIcon } from 'lucide-react';
 import { PricingTier } from '../types';
 import React, { useState } from 'react';
 import { 
@@ -16,13 +15,15 @@ import {
   Info
 } from 'lucide-react';
 import { 
-  HISTORICAL_DEMAND_TRENDS, 
+  HISTORICAL_DEMAND_TRENDS as ALL_TRENDS, 
   INDUSTRY_BREAKDOWN, 
   PLATFORM_DISTRIBUTION, 
   GEOGRAPHIC_DISTRIBUTION 
 } from '../data/mockData';
 
 export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPricing: () => void }> = ({ activePlan, onOpenPricing }) => {
+  // Free sees the last 3 months; Starter and above see the full history.
+  const HISTORICAL_DEMAND_TRENDS = activePlan === 'Free' ? ALL_TRENDS.slice(-3) : ALL_TRENDS;
   const [selectedIndustryMetric, setSelectedIndustryMetric] = useState<'retail' | 'compliance' | 'proptech' | 'foodOps'>('compliance');
   const [hoveredMonth, setHoveredMonth] = useState<number | null>(null);
 
@@ -56,19 +57,12 @@ export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPrici
   ];
 
   const fullCharts = activePlan === 'Pro' || activePlan === 'Business';
-  if (activePlan === 'Free') {
-    return (
-      <div className="rounded-2xl border border-amber-500/30 bg-slate-900/60 p-8 text-center space-y-3">
-        <LockIcon className="h-6 w-6 text-amber-400 mx-auto" />
-        <h2 className="text-base font-bold text-white">Historical demand trends</h2>
-        <p className="text-xs text-slate-400">Trend graphs are included from the Starter plan.</p>
-        <button onClick={onOpenPricing} className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 cursor-pointer">View plans</button>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {activePlan === 'Free' && (
+        <p className="text-[11px] text-amber-300">Free shows the last 3 months of demand. Starter unlocks the full history.</p>
+      )}
       {/* Title */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
         <div>
