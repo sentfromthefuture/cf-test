@@ -64,7 +64,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
     () => new Set([...opportunities].sort((a, b) => b.scores.compositeScore - a.scores.compositeScore).slice(0, 3).map((o) => o.id)),
     [opportunities]
   );
-  const locked = (id: string) => activePlan === 'Free' && !topFree.has(id); // Free: scores for the top 3 only
+  const visible = activePlan === 'Free' ? filtered.filter((o) => topFree.has(o.id)) : filtered;
 
   // Compute summary stats for the active filter set
   const totalDiscussions = filtered.reduce((acc, curr) => acc + curr.discussions, 0);
@@ -197,7 +197,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
           <div className="flex items-center gap-2 text-slate-300">
             <Crown className="h-4 w-4 text-amber-400 shrink-0" />
             <span>
-              <strong>Free Plan Preview:</strong> Scores are shown for the top 3 opportunities. Upgrade to <strong>Pro ($29/mo)</strong> to unlock historical demand graphs, competitor vulnerability audits, and development-ready PRDs.
+              <strong>Free Plan Preview:</strong> Displaying high-signal opportunities. Upgrade to <strong>Pro ($29/mo)</strong> to unlock historical demand graphs, competitor vulnerability audits, and development-ready PRDs.
             </span>
           </div>
           <button
@@ -226,7 +226,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                {filtered.map((item) => (
+                {visible.map((item) => (
                   <tr
                     key={item.id}
                     onClick={() => onSelectOpportunity(item)}
@@ -272,11 +272,11 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
                             className={`h-full rounded-full ${
                               item.scores.compositeScore >= 85 ? 'bg-cyan-400' : 'bg-blue-400'
                             }`}
-                            style={{ width: `${locked(item.id) ? 0 : item.scores.compositeScore}%` }}
+                            style={{ width: `${item.scores.compositeScore}%` }}
                           ></div>
                         </div>
                         <span className="font-mono font-bold text-white">
-                          {locked(item.id) ? '🔒' : item.scores.compositeScore}
+                          {item.scores.compositeScore}
                         </span>
                       </div>
                     </td>
@@ -302,7 +302,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
       ) : (
         /* Card Grid View */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((item) => (
+          {visible.map((item) => (
             <div
               key={item.id}
               onClick={() => onSelectOpportunity(item)}
@@ -316,7 +316,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-slate-400 font-mono">Score:</span>
                     <span className="font-mono font-black text-sm text-cyan-300 bg-cyan-950 px-2 py-0.5 rounded border border-cyan-800">
-                      {locked(item.id) ? '🔒' : item.scores.compositeScore}
+                      {item.scores.compositeScore}
                     </span>
                   </div>
                 </div>

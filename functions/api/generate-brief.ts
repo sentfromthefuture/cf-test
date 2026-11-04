@@ -7,9 +7,8 @@ interface Env {
 
 const SB_URL = 'https://wgoiukbgrdyjvfpqaipp.supabase.co';
 const SB_KEY = 'sb_publishable_B4fokBi_LoR1Pe8o39kTQA_REnB2KbK';
-// Access rules: briefs allowed per user per UTC day. Free gets a small taste, capped across ALL free users.
-const DAILY_LIMITS: Record<string, number> = { Free: 1, Starter: 2, Pro: 5, Business: 20 };
-const FREE_POOL_PER_DAY = 50;
+// Access rules: PRD generation is a Pro/Business feature. Briefs allowed per user per UTC day.
+const DAILY_LIMITS: Record<string, number> = { Pro: 5, Business: 20 };
 
 export const onRequestPost = async (context: { request: Request; env: Env }) => {
   const deny = (error: string, status: number) =>
@@ -25,12 +24,12 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     const subRes = await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${user.id}&select=plan,status,current_period_end`, { headers: svc });
     const sub: any = subRes.ok ? (await subRes.json())[0] : null;
     const live = sub && (sub.status === 'active' || (sub.status === 'cancelled' && sub.current_period_end && new Date(sub.current_period_end) > new Date()));
-    const plan: string = live ? sub.plan : 'Free';
-    const limit = DAILY_LIMITS[plan];
+    const limit = live ? DAILY_LIMITS[sub.plan] : undefined;
+    if (!limit) return deny('PRD generation is included in the Pro and Business plans.', 403);
 
-    const q = await fetch(`${SB_URL}/rest/v1/rpc/consume_brief`, { method: 'POST', headers: svc, body: JSON.stringify({ p_user: user.id, p_limit: limit, ...(plan === 'Free' ? { p_pool: FREE_POOL_PER_DAY } : {}) }) });
+    const q = await fetch(`${SB_URL}/rest/v1/rpc/consume_brief`, { method: 'POST', headers: svc, body: JSON.stringify({ p_user: user.id, p_limit: limit }) });
     if (!q.ok) return deny('Could not check your usage. Please try again.', 503);
-    if ((await q.json()) !== true) return deny(plan === 'Free' ? 'Free briefs are used up for now (1 per day, shared across free users). Try again tomorrow or upgrade for more.' : `Daily limit reached (${limit} briefs per day on ${plan}). It resets at midnight UTC.`, 429);
+    if ((await q.json()) !== true) return deny(`Daily limit reached (${limit} briefs per day on ${sub.plan}). It resets at midnight UTC.`, 429);
 
     const body: any = await context.request.json();
     const { industry, country, difficulty, budget, technology, businessModel, customTopic } = body;
