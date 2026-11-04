@@ -478,7 +478,14 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
       )}
 
       {/* Tab 3: Verifiable Raw Quotes */}
-      {activeTab === 'evidence' && (
+      {activeTab === 'evidence' && activePlan === 'Free' && (
+        <div className="rounded-2xl border border-amber-500/30 bg-slate-900/60 p-8 text-center space-y-3">
+          <h3 className="text-base font-bold text-white">Discussion evidence</h3>
+          <p className="text-xs text-slate-400">Real discussion citations are included from the Starter plan.</p>
+          <button onClick={onOpenPricing} className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 cursor-pointer">View plans</button>
+        </div>
+      )}
+      {activeTab === 'evidence' && activePlan !== 'Free' && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div>

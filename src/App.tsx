@@ -10,6 +10,7 @@ import { BotSwarmModal } from './components/BotSwarmModal';
 import { PricingModal } from './components/PricingModal';
 import { PaymentModal } from './components/PaymentModal';
 import { supabase } from './lib/supabase';
+import { canOpenOpportunity } from './lib/access';
 import { Opportunity, BotScout, ScoringWeights, PricingTier } from './types';
 import { INITIAL_OPPORTUNITIES, INITIAL_BOTS, DEFAULT_WEIGHTS, calculateCustomScore } from './data/mockData';
 import { Radar, Bot, Sparkles, Sliders, Crown, Layers, ArrowUpRight } from 'lucide-react';
@@ -77,7 +78,11 @@ export default function App() {
   };
 
   // Select opportunity and switch directly to Intelligence dossier view
+  // Free plan: scoring tools, scout bots and all but the top 3 dossiers lead to the pricing screen.
+  const openScoring = () => (activePlan === 'Free' ? setIsPricingOpen(true) : setIsScoringOpen(true));
+  const openBots = () => (activePlan === 'Free' ? setIsPricingOpen(true) : setIsBotsOpen(true));
   const handleSelectOpportunity = (opp: Opportunity) => {
+    if (!canOpenOpportunity(activePlan, opp, opportunities)) { setIsPricingOpen(true); return; }
     setSelectedOpportunity(opp);
     setCurrentTab('intelligence');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -91,8 +96,8 @@ export default function App() {
         setCurrentTab={setCurrentTab}
         activePlan={activePlan}
         onOpenPricing={() => setIsPricingOpen(true)}
-        onOpenScoring={() => setIsScoringOpen(true)}
-        onOpenBots={() => setIsBotsOpen(true)}
+        onOpenScoring={() => openScoring()}
+        onOpenBots={() => openBots()}
       />
 
       {/* Main Content Area */}
@@ -103,8 +108,8 @@ export default function App() {
             bots={bots}
             onSelectOpportunity={handleSelectOpportunity}
             onNavigateTab={setCurrentTab}
-            onOpenBots={() => setIsBotsOpen(true)}
-            onOpenScoring={() => setIsScoringOpen(true)}
+            onOpenBots={() => openBots()}
+            onOpenScoring={() => openScoring()}
             activePlan={activePlan}
           />
         )}
@@ -122,10 +127,10 @@ export default function App() {
           <OpportunityIntelligenceView
             opportunity={selectedOpportunity}
             allOpportunities={opportunities}
-            onSelectOpportunity={setSelectedOpportunity}
+            onSelectOpportunity={(o) => { if (canOpenOpportunity(activePlan, o, opportunities)) setSelectedOpportunity(o); else setIsPricingOpen(true); }}
             activePlan={activePlan}
             onOpenPricing={() => setIsPricingOpen(true)}
-            onOpenScoring={() => setIsScoringOpen(true)}
+            onOpenScoring={() => openScoring()}
             onOpenPayment={(tier) => {
               setCheckoutTier(tier);
               setIsPaymentOpen(true);
@@ -138,7 +143,7 @@ export default function App() {
         )}
 
         {currentTab === 'ai-generator' && (
-          <AiGeneratorView />
+          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} />
         )}
       </main>
 
@@ -202,14 +207,14 @@ export default function App() {
 
             <div className="flex flex-wrap items-center gap-3">
               <button
-                onClick={() => setIsBotsOpen(true)}
+                onClick={() => openBots()}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-700 transition-colors cursor-pointer"
               >
                 <Bot className="h-3.5 w-3.5 text-cyan-400" />
                 10 Autonomous Bots
               </button>
               <button
-                onClick={() => setIsScoringOpen(true)}
+                onClick={() => openScoring()}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-700 transition-colors cursor-pointer"
               >
                 <Sliders className="h-3.5 w-3.5 text-slate-400" />

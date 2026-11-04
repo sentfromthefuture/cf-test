@@ -21,7 +21,7 @@ import {
   FileCheck
 } from 'lucide-react';
 
-export const AiGeneratorView: React.FC = () => {
+export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void }> = ({ activePlan, onOpenPricing }) => {
   const [industry, setIndustry] = useState('Retail & Commerce');
   const [country, setCountry] = useState('United States & Global');
   const [difficulty, setDifficulty] = useState('Medium');
@@ -184,6 +184,16 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
+
+  if (activePlan === 'Free' || activePlan === 'Starter') {
+    return (
+      <div className="rounded-2xl border border-amber-500/30 bg-slate-900/60 p-8 text-center space-y-3">
+        <h2 className="text-base font-bold text-white">AI opportunity briefs</h2>
+        <p className="text-xs text-slate-400">Generating development-ready briefs is included in the Pro and Business plans.</p>
+        <button onClick={onOpenPricing} className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 cursor-pointer">View plans</button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
