@@ -9,6 +9,7 @@ import { ScoringCalculatorModal } from './components/ScoringCalculatorModal';
 import { BotSwarmModal } from './components/BotSwarmModal';
 import { PricingModal } from './components/PricingModal';
 import { PaymentModal } from './components/PaymentModal';
+import { supabase } from './lib/supabase';
 import { Opportunity, BotScout, ScoringWeights, PricingTier } from './types';
 import { INITIAL_OPPORTUNITIES, INITIAL_BOTS, DEFAULT_WEIGHTS, calculateCustomScore } from './data/mockData';
 import { Radar, Bot, Sparkles, Sliders, Crown, Layers, ArrowUpRight } from 'lucide-react';
@@ -19,9 +20,33 @@ export default function App() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>(INITIAL_OPPORTUNITIES);
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity>(INITIAL_OPPORTUNITIES[0]);
   const [bots, setBots] = useState<BotScout[]>(INITIAL_BOTS);
-  const [activePlan, setActivePlan] = useState<PricingTier>(() => {
-    return (localStorage.getItem('dr_active_plan') as PricingTier) || 'Free';
-  });
+  const [activePlan, setActivePlan] = useState<PricingTier>('Free');
+  const [signedIn, setSignedIn] = useState(false);
+  const [isAuthOpen, setIsAuthOpen] = useState(false);
+
+  // The plan comes from the server (Supabase), never from the browser.
+  useEffect(() => {
+    let alive = true;
+    const load = async (uid?: string): Promise<PricingTier> => {
+      if (!uid) return 'Free';
+      const { data } = await supabase.from('subscriptions').select('plan,status,current_period_end').eq('user_id', uid).maybeSingle();
+      const live = data && (data.status === 'active' || (data.status === 'cancelled' && data.current_period_end && new Date(data.current_period_end) > new Date()));
+      return (live ? data.plan : 'Free') as PricingTier;
+    };
+    const sync = async (uid?: string) => {
+      setSignedIn(!!uid);
+      let plan = await load(uid);
+      const returning = new URLSearchParams(window.location.search).has('checkout');
+      for (let i = 0; uid && returning && plan === 'Free' && i < 10; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        plan = await load(uid);
+      }
+      if (alive) setActivePlan(plan);
+    };
+    supabase.auth.getSession().then(({ data }) => sync(data.session?.user.id));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { sync(s?.user.id); });
+    return () => { alive = false; sub.subscription.unsubscribe(); };
+  }, []);
 
   // Modals
   const [isScoringOpen, setIsScoringOpen] = useState(false);
@@ -136,9 +161,8 @@ export default function App() {
         onClose={() => setIsPricingOpen(false)}
         activePlan={activePlan}
         onSelectPlan={(plan) => {
-          setActivePlan(plan);
-          localStorage.setItem('dr_active_plan', plan);
           setIsPricingOpen(false);
+          if (plan !== 'Free') { setCheckoutTier(plan); setIsPaymentOpen(true); }
         }}
         onOpenCheckout={(tier) => {
           setCheckoutTier(tier);
@@ -151,11 +175,14 @@ export default function App() {
         isOpen={isPaymentOpen}
         onClose={() => setIsPaymentOpen(false)}
         selectedTier={checkoutTier}
-        onPaymentSuccess={(tier) => {
-          setActivePlan(tier);
-          localStorage.setItem('dr_active_plan', tier);
-        }}
       />
+      <PaymentModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} selectedTier="Free" authOnly />
+      <button
+        onClick={() => setIsAuthOpen(true)}
+        className="fixed bottom-4 right-4 z-40 rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer"
+      >
+        {signedIn ? 'Account' : 'Sign in'}
+      </button>
 
       {/* Footer & Strategic Business Model Insights */}
       <footer className="border-t border-slate-900 bg-slate-950 py-10 px-4 sm:px-6 mt-12 text-xs text-slate-400">

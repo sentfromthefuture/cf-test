@@ -250,16 +250,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                           : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                       }`}
                     >
-                      {isCurrent ? 'Active Plan' : t.tier === 'Free' ? 'Switch to Free' : `Subscribe with PayPal / Binance (${t.price})`}
+                      {isCurrent ? 'Active Plan' : t.tier === 'Free' ? 'Switch to Free' : `Subscribe (${t.price}/mo)`}
                     </button>
-                    {t.tier !== 'Free' && !isCurrent && (
-                      <button
-                        onClick={() => onSelectPlan(t.tier)}
-                        className="w-full text-center text-[10px] text-slate-500 hover:text-slate-300 underline cursor-pointer"
-                      >
-                        (or simulate {t.tier} without payment)
-                      </button>
-                    )}
                   </div>
                 </div>
               );
