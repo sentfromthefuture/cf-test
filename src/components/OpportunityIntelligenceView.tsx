@@ -43,10 +43,9 @@ export const OpportunityIntelligenceView: React.FC<OpportunityIntelligenceViewPr
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'competitors' | 'evidence' | 'architecture'>('overview');
   const [copied, setCopied] = useState(false);
-  const [forcePreviewUnlocked, setForcePreviewUnlocked] = useState(false);
 
   // Pro features are locked if user is on Free/Starter and hasn't toggled demo unlock
-  const isGated = (activePlan === 'Free' || activePlan === 'Starter') && !forcePreviewUnlocked;
+  const isGated = activePlan === 'Free' || activePlan === 'Starter';
 
   const handleCopyPRD = () => {
     const text = `# DemandRadar Market Intelligence Brief
@@ -362,15 +361,9 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
           <div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-3 rounded-xl text-xs">
             <span className="text-slate-300 flex items-center gap-1.5">
               <Crown className="h-3.5 w-3.5 text-amber-400" />
-              Paywall Tier Simulation: <strong>{activePlan} Tier</strong>
+              Your plan: <strong>{activePlan} Tier</strong>
             </span>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setForcePreviewUnlocked(!forcePreviewUnlocked)}
-                className="text-[11px] text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
-              >
-                {forcePreviewUnlocked ? 'Toggle Gated State (Preview Paywall)' : 'Toggle Full Unlock (Simulate Pro)'}
-              </button>
               <button
                 onClick={onOpenPricing}
                 className="bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2.5 py-1 rounded text-xs font-semibold hover:bg-amber-500/30 cursor-pointer"
@@ -450,13 +443,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                   }}
                   className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-all cursor-pointer shadow-md"
                 >
-                  Upgrade to Pro ($29/mo) — PayPal / Binance
-                </button>
-                <button
-                  onClick={() => setForcePreviewUnlocked(true)}
-                  className="text-xs text-slate-400 hover:text-white underline cursor-pointer"
-                >
-                  Simulate Pro Preview
+                  Upgrade to Pro ($29/mo)
                 </button>
               </div>
             </div>
@@ -607,13 +594,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                   }}
                   className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-all cursor-pointer shadow-md"
                 >
-                  Upgrade to Pro ($29/mo) — PayPal / Binance
-                </button>
-                <button
-                  onClick={() => setForcePreviewUnlocked(true)}
-                  className="text-xs text-slate-400 hover:text-white underline cursor-pointer"
-                >
-                  Simulate Pro Preview
+                  Upgrade to Pro ($29/mo)
                 </button>
               </div>
             </div>

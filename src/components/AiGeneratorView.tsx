@@ -1,3 +1,4 @@
+import { supabase } from '../lib/supabase';
 import React, { useState } from 'react';
 import { 
   Sparkles, 
@@ -56,9 +57,10 @@ export const AiGeneratorView: React.FC = () => {
     }, 1100);
 
     try {
+      const { data: auth } = await supabase.auth.getSession();
       const res = await fetch('/api/generate-brief', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(auth.session ? { Authorization: `Bearer ${auth.session.access_token}` } : {}) },
         body: JSON.stringify({
           industry,
           country,
@@ -72,6 +74,10 @@ export const AiGeneratorView: React.FC = () => {
 
       const data = await res.json();
       clearInterval(stepInterval);
+      if (res.status === 401 || res.status === 403 || res.status === 429 || res.status === 503) {
+        setErrorMsg(data.error || 'Not allowed');
+        return;
+      }
       if (data && data.brief) {
         setGeneratedBrief(data.brief);
       } else {

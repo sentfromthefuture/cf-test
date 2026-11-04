@@ -2,10 +2,35 @@
 
 interface Env {
   GEMINI_API_KEY?: string;
+  SUPABASE_SERVICE_KEY: string;
 }
 
+const SB_URL = 'https://wgoiukbgrdyjvfpqaipp.supabase.co';
+const SB_KEY = 'sb_publishable_B4fokBi_LoR1Pe8o39kTQA_REnB2KbK';
+// Access rules: PRD generation is a Pro/Business feature. Briefs allowed per user per UTC day.
+const DAILY_LIMITS: Record<string, number> = { Pro: 5, Business: 20 };
+
 export const onRequestPost = async (context: { request: Request; env: Env }) => {
+  const deny = (error: string, status: number) =>
+    new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
   try {
+    const token = (context.request.headers.get('Authorization') || '').replace(/^Bearer /, '');
+    if (!token) return deny('Sign in to generate briefs.', 401);
+    const u = await fetch(`${SB_URL}/auth/v1/user`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${token}` } });
+    if (!u.ok) return deny('Session expired. Please sign in again.', 401);
+    const user: any = await u.json();
+
+    const svc = { apikey: context.env.SUPABASE_SERVICE_KEY, Authorization: `Bearer ${context.env.SUPABASE_SERVICE_KEY}`, 'Content-Type': 'application/json' };
+    const subRes = await fetch(`${SB_URL}/rest/v1/subscriptions?user_id=eq.${user.id}&select=plan,status,current_period_end`, { headers: svc });
+    const sub: any = subRes.ok ? (await subRes.json())[0] : null;
+    const live = sub && (sub.status === 'active' || (sub.status === 'cancelled' && sub.current_period_end && new Date(sub.current_period_end) > new Date()));
+    const limit = live ? DAILY_LIMITS[sub.plan] : undefined;
+    if (!limit) return deny('PRD generation is included in the Pro and Business plans.', 403);
+
+    const q = await fetch(`${SB_URL}/rest/v1/rpc/consume_brief`, { method: 'POST', headers: svc, body: JSON.stringify({ p_user: user.id, p_limit: limit }) });
+    if (!q.ok) return deny('Could not check your usage. Please try again.', 503);
+    if ((await q.json()) !== true) return deny(`Daily limit reached (${limit} briefs per day on ${sub.plan}). It resets at midnight UTC.`, 429);
+
     const body: any = await context.request.json();
     const { industry, country, difficulty, budget, technology, businessModel, customTopic } = body;
     const apiKey = context.env.GEMINI_API_KEY;
