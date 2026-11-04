@@ -134,7 +134,7 @@ export default function App() {
         )}
 
         {currentTab === 'trends' && (
-          <TrendAnalyticsView />
+          <TrendAnalyticsView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} />
         )}
 
         {currentTab === 'ai-generator' && (

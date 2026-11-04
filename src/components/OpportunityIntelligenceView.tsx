@@ -46,8 +46,30 @@ export const OpportunityIntelligenceView: React.FC<OpportunityIntelligenceViewPr
 
   // Pro features are locked if user is on Free/Starter and hasn't toggled demo unlock
   const isGated = activePlan === 'Free' || activePlan === 'Starter';
+  const canExport = activePlan === 'Pro' || activePlan === 'Business'; // exports: Pro and above
+  const isBusiness = activePlan === 'Business';
+  const saveFile = (name: string, text: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const slugOf = () => opportunity.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const handleRawDump = () => {
+    if (!isBusiness) { onOpenPricing(); return; }
+    saveFile(`${slugOf()}-raw-discussions.json`, JSON.stringify({ opportunity: opportunity.title, evidence: opportunity.evidence }, null, 2), 'application/json');
+  };
+  const handleWhiteLabel = () => {
+    if (!isBusiness) { onOpenPricing(); return; }
+    const company = window.prompt('Your company name for the brief header?')?.trim();
+    if (!company) return;
+    saveFile(`${slugOf()}-client-brief.md`, `# ${company} - Market Opportunity Brief\n## Opportunity: ${opportunity.title}\n\nProblem:\n${opportunity.problemDescription}\n\nTarget customer:\n${opportunity.targetPersona}\n\nSuggested features:\n${opportunity.suggestedFeatures.join('\n')}\n\nMonetization:\n${opportunity.monetization}`, 'text/markdown');
+  };
 
   const handleCopyPRD = () => {
+    if (!canExport) { onOpenPricing(); return; }
     const text = `# DemandRadar Market Intelligence Brief
 ## Opportunity: ${opportunity.title}
 - Industry: ${opportunity.category}
@@ -83,6 +105,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
   };
 
   const handleDownloadPRD = () => {
+    if (!canExport) { onOpenPricing(); return; }
     const text = `# DemandRadar Market Intelligence Brief\n## Opportunity: ${opportunity.title}\n\nProblem:\n${opportunity.problemDescription}\n\nTarget ICP:\n${opportunity.targetPersona}\n\nFeatures:\n${opportunity.suggestedFeatures.join('\n')}\n\nMonetization:\n${opportunity.monetization}`;
     const blob = new Blob([text], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -287,7 +310,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 Target Customer Persona (Who Experiences It)
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3 rounded-xl border border-slate-800">
-                {opportunity.targetPersona}
+                {isGated ? 'The full customer persona profile is included in the Pro plan.' : opportunity.targetPersona}
               </p>
             </div>
 
@@ -373,7 +396,10 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
             </div>
           </div>
 
-          <div className={`space-y-4 ${isGated ? 'blur-xs select-none pointer-events-none' : ''}`}>
+          <div className={`space-y-4 ${activePlan === 'Free' ? 'blur-xs select-none pointer-events-none' : ''}`}>
+            {activePlan === 'Starter' && (
+              <p className="text-[11px] text-amber-300">Starter shows a limited competitor view. Upgrade to Pro for the full vulnerability matrix.</p>
+            )}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -388,7 +414,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {opportunity.competitors.map((comp, idx) => (
+                {(activePlan === 'Starter' ? opportunity.competitors.slice(0, 1) : opportunity.competitors).map((comp, idx) => (
                   <div key={idx} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                       <span className="font-bold text-white text-sm">{comp.name}</span>
@@ -421,7 +447,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
           </div>
 
           {/* Gated Overlay */}
-          {isGated && (
+          {activePlan === 'Free' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-slate-950/85 backdrop-blur-sm rounded-2xl border border-amber-500/30">
               <div className="h-12 w-12 rounded-full bg-amber-500/20 border border-amber-500/50 flex items-center justify-center text-amber-400 mb-3 shadow-lg">
                 <Lock className="h-6 w-6" />
@@ -464,9 +490,17 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 Direct quote snippets indexed and validated by Reddit Scout and Review Scout.
               </p>
             </div>
-            <span className="text-xs font-mono text-cyan-400">
-              Audited by Research Auditor
-            </span>
+            <div className="flex items-center gap-2">
+              {isBusiness && (
+                <>
+                  <button onClick={handleRawDump} className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer">Raw dump (.json)</button>
+                  <button onClick={handleWhiteLabel} className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer">White-label brief</button>
+                </>
+              )}
+              <span className="text-xs font-mono text-cyan-400">
+                Audited by Research Auditor
+              </span>
+            </div>
           </div>
 
           <div className="space-y-4">

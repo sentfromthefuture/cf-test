@@ -89,7 +89,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Full competitor vulnerability analysis', included: true },
         { text: 'Development-ready 3-week MVP specs', included: true },
         { text: 'Export research (Markdown / JSON / PRD)', included: true },
-        { text: 'Weekly emerging problem digest', included: true },
+        { text: 'Weekly emerging problem digest (coming soon)', included: true },
       ],
     },
     {
@@ -100,13 +100,13 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       description: 'Built for software agencies, venture studios, and product discovery teams.',
       features: [
         { text: 'Everything in Pro tier', included: true },
-        { text: 'Direct REST API access to problem database', included: true },
-        { text: 'Custom keyword & sub-reddit tracking bots', included: true },
+        { text: 'Direct REST API access to problem database (coming soon)', included: true },
+        { text: 'Custom keyword & sub-reddit tracking bots (coming soon)', included: true },
         { text: 'Raw sentiment & discussion dumps', included: true },
         { text: 'White-label client presentation briefs', included: true },
         { text: 'Priority Gemini PRD generation queue', included: true },
-        { text: 'Multi-seat team workspace (5 seats)', included: true },
-        { text: 'Physical business & supply-chain signals', included: true },
+        { text: 'Multi-seat team workspace (5 seats) (coming soon)', included: true },
+        { text: 'Physical business & supply-chain signals (coming soon)', included: true },
       ],
     },
   ];

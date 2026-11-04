@@ -116,16 +116,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
-          {/* Download ZIP button */}
-          <a
-            href="/demandradar-app.zip"
-            download="demandradar-app.zip"
-            className="flex items-center gap-1.5 rounded-lg border border-cyan-800/80 bg-cyan-950/60 px-2.5 py-1.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-900/60 hover:text-white transition-all cursor-pointer shadow-xs"
-            title="Download full project files as ZIP for GitHub & Cloudflare deployment"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Export ZIP</span>
-          </a>
 
           {/* Scoring Algorithm Trigger */}
           <button

@@ -59,6 +59,13 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
     });
   }, [opportunities, searchTerm, selectedCategory, selectedLevel, sortBy]);
 
+  // Free plan: only the 3 highest-scoring opportunities are listed.
+  const topFree = useMemo(
+    () => new Set([...opportunities].sort((a, b) => b.scores.compositeScore - a.scores.compositeScore).slice(0, 3).map((o) => o.id)),
+    [opportunities]
+  );
+  const visible = activePlan === 'Free' ? filtered.filter((o) => topFree.has(o.id)) : filtered;
+
   // Compute summary stats for the active filter set
   const totalDiscussions = filtered.reduce((acc, curr) => acc + curr.discussions, 0);
   const avgGrowth = filtered.length > 0 ? Math.round(filtered.reduce((acc, curr) => acc + curr.growthRate, 0) / filtered.length) : 0;
@@ -219,7 +226,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                {filtered.map((item) => (
+                {visible.map((item) => (
                   <tr
                     key={item.id}
                     onClick={() => onSelectOpportunity(item)}
@@ -295,7 +302,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
       ) : (
         /* Card Grid View */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((item) => (
+          {visible.map((item) => (
             <div
               key={item.id}
               onClick={() => onSelectOpportunity(item)}
