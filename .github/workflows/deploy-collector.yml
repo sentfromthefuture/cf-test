@@ -34,10 +34,12 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # Pinned to the version this was tested with; CLI v3 has different flags from v2.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 3.0.0
 
       # The function authenticates its own callers (scheduler secret or admin JWT), so the platform JWT check is off.
       - name: Deploy collect
-        run: supabase functions deploy collect --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+        # --yes: CLI v3 refuses to deploy non-interactively without it. --remote=<ref> is the v3 form of --project-ref.
+        run: supabase functions deploy collect --remote="$SUPABASE_PROJECT_REF" --no-verify-jwt --yes
