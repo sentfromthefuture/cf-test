@@ -77,24 +77,23 @@ Each skipped source has its reason, restriction, official-API status and integra
 ## 6. How to activate (Supabase dashboard + GitHub only; no laptop needed where noted)
 
 1. **Migrations** – Supabase dashboard → SQL editor: run `supabase/migrations/20261104000000_market_intel_schema.sql`, then `…000100_market_intel_functions.sql`. (Or `supabase db push`.)
-2. **Function secrets** – Edge Functions → Secrets: `COLLECTOR_SECRET` (long random string), `SUPABASE_SERVICE_KEY` (service/secret key), and optionally `GITHUB_TOKEN` (read-only, public data), `STACKEXCHANGE_KEY`, `GEMINI_API_KEY` (+ `GEMINI_MODEL`, `GEMINI_EMBEDDING_MODEL`), `AUTHOR_HASH_SALT`. Never put these in frontend env vars.
-3. **Deploy the function** – `supabase functions deploy collect --no-verify-jwt` (needs the Supabase CLI or a CI job; **a GitHub Actions workflow for this is not written yet**, see §7).
+2. **Function secrets** – Edge Functions → Secrets. Nothing is required for a manual sync: the function automatically receives `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` from Supabase (names starting with `SUPABASE_` are reserved, so do **not** try to set them). Add these only when needed: `COLLECTOR_SECRET` (long random string; required only for the scheduled cron), and optionally `GITHUB_TOKEN` (read-only, public data), `STACKEXCHANGE_KEY`, `GEMINI_API_KEY` (+ `GEMINI_MODEL`, `GEMINI_EMBEDDING_MODEL`), `AUTHOR_HASH_SALT`. Never put these in frontend env vars.
+3. **Deploy the function** – automatic: `.github/workflows/deploy-collector.yml` deploys `collect` on every push to `main` that touches `supabase/functions/**` (and on demand from the Actions tab). Needs repo secrets `SUPABASE_ACCESS_TOKEN` and `SUPABASE_PROJECT_REF`. Uses Supabase CLI 3.0.0 with `--yes --remote=<ref>`.
 4. **Make yourself admin** – SQL editor: `insert into public.dr_admins (user_id) select id from auth.users where email = '<your email>';`
 5. **Schedule** – edit and run `supabase/cron.sql` in the SQL editor.
 6. Open the **Data Sources** tab → “Sync all due sources” to test before relying on cron.
 
 ## 7. NOT DONE / next steps (rough priority)
 
-1. **Deploy path from a phone**: add a GitHub Actions workflow that deploys the Edge Function (needs `SUPABASE_ACCESS_TOKEN` repo secret; the push token may need `workflow` scope).
-2. **Licence/attribution display (compliance)**: the live evidence data already carries `url`, `license`, `attribution`, but `OpportunityIntelligenceView`'s Evidence tab still renders only quote/author/upvotes. Stack Exchange content is CC BY-SA, so author, link and licence **must** be shown next to any excerpt before this is public. Also show per-component score basis labels (data exists in `opportunity.live.basis`) in that view.
-3. Run the live checks for Hacker News and Stack Exchange; fix anything real APIs reveal.
-4. Add a Gemini key, then **calibrate** the cluster threshold on real data and review classification quality. Records analysed by the keyword fallback are not re-analysed when a key is added later (needs a re-queue path).
-5. Browser QA of the new tabs and the demo/live switch on mobile.
-6. Cluster merge pass (two clusters for one problem can arise concurrently, or from keyword vs embedding paths).
-7. Server-side plan enforcement for evidence (currently any signed-in user can read excerpts; the app's plan gating is client-side as before).
-8. Wire the existing AI brief/PRD generator (`functions/api/generate-brief.ts`) to live cluster evidence.
-9. Retention/purge job for stored excerpts; refresh engagement for already-stored HN items; GitHub Discussions (GraphQL); Stack Exchange answers; open-data enrichment layer.
-10. CI: run `npm run test:collector`, the SQL tests and `tsc` on every push. Note `npm install` needs `--legacy-peer-deps` (pre-existing peer conflict; repo uses `bun.lock`).
+1. **Licence/attribution display (compliance)**: the live evidence data already carries `url`, `license`, `attribution`, but `OpportunityIntelligenceView`'s Evidence tab still renders only quote/author/upvotes. Stack Exchange content is CC BY-SA, so author, link and licence **must** be shown next to any excerpt before this is public. Also show per-component score basis labels (data exists in `opportunity.live.basis`) in that view.
+2. Run the live checks for Hacker News and Stack Exchange; fix anything real APIs reveal.
+3. Add a Gemini key, then **calibrate** the cluster threshold on real data and review classification quality. Records analysed by the keyword fallback are not re-analysed when a key is added later (needs a re-queue path).
+4. Browser QA of the new tabs and the demo/live switch on mobile.
+5. Cluster merge pass (two clusters for one problem can arise concurrently, or from keyword vs embedding paths).
+6. Server-side plan enforcement for evidence (currently any signed-in user can read excerpts; the app's plan gating is client-side as before).
+7. Wire the existing AI brief/PRD generator (`functions/api/generate-brief.ts`) to live cluster evidence.
+8. Retention/purge job for stored excerpts; refresh engagement for already-stored HN items; GitHub Discussions (GraphQL); Stack Exchange answers; open-data enrichment layer.
+9. CI: run `npm run test:collector`, the SQL tests and `tsc` on every push. Note `npm install` needs `--legacy-peer-deps` (pre-existing peer conflict; repo uses `bun.lock`).
 
 ## 8. Security and licensing notes
 - No API key or privileged credential exists in frontend code. Collector secrets live only in Edge Function secrets / Vault; error messages are redacted before they are stored.
