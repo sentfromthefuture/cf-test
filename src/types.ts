@@ -22,6 +22,34 @@ export interface EvidenceQuote {
   author: string;
   quote: string;
   upvotes: number;
+  /** Live evidence only: link back to the original discussion, and the licence/attribution that must accompany the excerpt. */
+  url?: string;
+  license?: string;
+  attribution?: string;
+  analysisMethod?: 'llm' | 'heuristic';
+}
+
+/** Present only on opportunities built from real collected data (absent on demo data). */
+export interface LiveMeta {
+  clusterId: string;
+  uniqueDiscussions: number;
+  sourceCount: number;
+  sources: string[];
+  spreading: boolean;
+  confidence: 'low' | 'medium' | 'high';
+  engagementTotal: number;
+  wtpEvidenceCount: number;
+  growthPct: number | null;
+  recentDiscussions: number;
+  priorDiscussions: number;
+  firstSeen: string | null;
+  lastSeen: string | null;
+  severityAvg: number | null;
+  /** Per score component: measured | ai_estimate | evidence_count | derived | insufficient_data */
+  basis: Partial<Record<keyof Omit<ScoreBreakdown, 'compositeScore'>, string>>;
+  aiSummarised: boolean;
+  scoreFormula: string;
+  competitorsNamed: Record<string, number>;
 }
 
 export interface Opportunity {
@@ -49,18 +77,7 @@ export interface Opportunity {
   monetization: string;
   competitors: CompetitorItem[];
   evidence: EvidenceQuote[];
-}
-
-export interface BotScout {
-  id: string;
-  name: string;
-  role: string;
-  platform: string;
-  target: string;
-  activeScans: number;
-  status: 'active' | 'analyzing' | 'generating' | 'verifying' | 'idle';
-  speed: string;
-  lastFinding: string;
+  live?: LiveMeta;
 }
 
 export type PricingTier = 'Free' | 'Starter' | 'Pro' | 'Business';

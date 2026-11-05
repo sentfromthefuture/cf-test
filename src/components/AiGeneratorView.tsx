@@ -37,7 +37,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const steps = [
-    'Deploying Scout bots to Reddit, X, and developer discussions...',
+    'Reviewing collected public discussions...',
     'Clustering recurring complaints into root-cause bottlenecks...',
     'Scoring commercial willingness-to-pay and competitor gaps...',
     'Synthesizing 3-week MVP technical architecture & PRD specification...',
@@ -134,7 +134,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
           dataModelSummary: 'Tenants, Integrations, EventLogs, Reconciliations, and AlertRules tables.'
         },
         gtmStrategy: [
-          { phase: 'Week 1', action: 'Direct outreach to top 50 authors of complaining Reddit/X threads identified by Scout bots' },
+          { phase: 'Week 1', action: 'Reach out to people in the linked discussions that describe this problem' },
           { phase: 'Week 2', action: 'Publish interactive "Cost of Manual Errors" free calculator to drive inbound traffic' },
           { phase: 'Week 3', action: 'Launch on ProductHunt and industry-specific Discord/Slack groups with lifetime early-bird tier' }
         ]
@@ -342,7 +342,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
           <span className="text-xs text-slate-400 flex items-center gap-1.5">
             <ShieldCheck className="h-4 w-4 text-emerald-400" />
-            Backed by 10 specialized autonomous bots with verifiable willingness-to-pay.
+            Grounded in collected public discussions where evidence exists; estimates are labelled.
           </span>
           <button
             type="submit"

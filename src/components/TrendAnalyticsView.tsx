@@ -1,5 +1,6 @@
 import { Lock as LockIcon } from 'lucide-react';
 import { PricingTier } from '../types';
+import { Overview, timeAgo } from '../lib/liveData';
 import React, { useState } from 'react';
 import { 
   TrendingUp, 
@@ -22,7 +23,7 @@ import {
   GEOGRAPHIC_DISTRIBUTION 
 } from '../data/mockData';
 
-export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPricing: () => void }> = ({ activePlan, onOpenPricing }) => {
+export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPricing: () => void; isDemo: boolean; overview: Overview | null }> = ({ activePlan, onOpenPricing, isDemo, overview }) => {
   const [selectedIndustryMetric, setSelectedIndustryMetric] = useState<'retail' | 'compliance' | 'proptech' | 'foodOps'>('compliance');
   const [hoveredMonth, setHoveredMonth] = useState<number | null>(null);
 
@@ -57,7 +58,69 @@ export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPrici
 
   const fullCharts = activePlan === 'Pro' || activePlan === 'Business';
   if (activePlan === 'Free') {
+    // ---- LIVE MODE: only figures that can actually be measured from collected data. No demo charts are mixed in.
+  if (!isDemo) {
+    const totalRecords = overview?.by_source.reduce((a, b) => a + b.records, 0) ?? 0;
+    const industries = overview?.industries ?? [];
+    const totalIndustry = industries.reduce((a, b) => a + b.unique_discussions, 0) || 1;
     return (
+      <div className="space-y-6 animate-fade-in">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-white">Market Trend Analytics</h1>
+            <p className="text-xs text-slate-400 mt-1">Measured from collected public discussions. Charts appear only when there is enough history to be meaningful.</p>
+          </div>
+          <div className="text-xs text-slate-400 font-mono">Last sync: {timeAgo(overview?.last_collection_at)}</div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 space-y-4">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2"><Share2 className="h-4 w-4 text-purple-400" /> Volume by Source Platform</h2>
+            {(overview?.by_source ?? []).map((p) => (
+              <div key={p.source_id} className="space-y-1 text-xs">
+                <div className="flex justify-between"><span className="font-medium text-slate-200">{p.name}</span>
+                  <span className="font-mono text-slate-300">{p.records.toLocaleString()} <span className="text-cyan-300 font-bold">{totalRecords ? Math.round((p.records / totalRecords) * 100) : 0}%</span></span></div>
+                <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div className="h-full rounded-full bg-cyan-500" style={{ width: `${totalRecords ? (p.records / totalRecords) * 100 : 0}%` }} /></div>
+              </div>
+            ))}
+            <p className="text-[11px] text-slate-500">Share of collected records, not of all discussion on the internet. Only sources with an official, permitted API are collected.</p>
+          </div>
+
+          {fullCharts ? (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 space-y-3">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2"><BarChart3 className="h-4 w-4 text-amber-400" /> Problem Share by Industry</h2>
+              {industries.length === 0 && <p className="text-xs text-slate-500">No clusters yet.</p>}
+              {industries.map((i) => (
+                <div key={i.industry} className="space-y-1 text-xs">
+                  <div className="flex justify-between"><span className="text-slate-300">{i.industry}</span><span className="font-mono text-slate-300">{i.unique_discussions.toLocaleString()} discussions <span className="text-white font-bold">{Math.round((i.unique_discussions / totalIndustry) * 100)}%</span></span></div>
+                  <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800"><div className="h-full bg-gradient-to-r from-amber-500 to-yellow-400 rounded-full" style={{ width: `${(i.unique_discussions / totalIndustry) * 100}%` }} /></div>
+                </div>
+              ))}
+              <p className="text-[11px] text-slate-500">Industry labels come from the classifier (AI when configured, otherwise conservative keyword matching) and are estimates.</p>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-amber-500/30 bg-slate-900/60 p-5 flex flex-col justify-center gap-3 text-xs">
+              <span className="text-slate-300">The industry breakdown is included in the Pro plan.</span>
+              <button onClick={onOpenPricing} className="self-start rounded-lg bg-amber-500/20 border border-amber-500/50 px-3 py-1 font-semibold text-amber-300 hover:bg-amber-500/30 cursor-pointer">Upgrade to Pro</button>
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-400">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
+            <h2 className="text-sm font-bold text-white">Demand growth over time</h2>
+            <p>Growth is measured per cluster as unique discussions in the last 30 days versus the 30 days before, and is shown on each opportunity once at least five discussions span both windows. It is “insufficient data” until the collector has built that history.</p>
+          </div>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
+            <h2 className="text-sm font-bold text-white">Geographic concentration</h2>
+            <p>Not collected. GitHub, Hacker News and Stack Exchange do not provide reliable location data, and storing author locations would add personal data we do not need.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
       <div className="rounded-2xl border border-amber-500/30 bg-slate-900/60 p-8 text-center space-y-3">
         <LockIcon className="h-6 w-6 text-amber-400 mx-auto" />
         <h2 className="text-base font-bold text-white">Historical demand trends</h2>
@@ -74,16 +137,16 @@ export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPrici
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl sm:text-2xl font-bold text-white">Market Trend Analytics</h1>
-            <span className="rounded bg-emerald-950 px-2 py-0.5 text-xs font-mono text-emerald-400 border border-emerald-800">
-              Surge Verified
+            <span className="rounded bg-amber-950 px-2 py-0.5 text-xs font-mono text-amber-300 border border-amber-800">
+              Demo data
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Aggregated longitudinal intelligence across 48,000+ public discussions, review portals, and code repositories.
+            Illustrative sample charts. These figures are placeholders and were not collected from real sources.
           </p>
         </div>
         <div className="text-xs text-slate-400 font-mono">
-          Updated: Today at 11:50 UTC
+          Demo sample
         </div>
       </div>
 
@@ -271,8 +334,8 @@ export const TrendAnalyticsView: React.FC<{ activePlan: PricingTier; onOpenPrici
           </div>
 
           <div className="rounded-xl bg-slate-950/80 p-3 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-            <p className="font-semibold text-slate-300">Research Scout Observation:</p>
-            <p>Reddit accounts for 38% of unfiltered human pain point discussions, followed by X complaints tagged with competitor handles.</p>
+            <p className="font-semibold text-slate-300">Demo sample:</p>
+            <p>Placeholder distribution for illustration only; it does not reflect collected data or any platform that is actually connected.</p>
           </div>
         </div>
       </div>

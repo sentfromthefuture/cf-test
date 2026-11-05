@@ -6,7 +6,8 @@ import {
   FileText, 
   TrendingUp, 
   Sparkles, 
-  Bot, 
+  Database,
+  Activity,
   Sliders, 
   Crown,
   ChevronRight,
@@ -20,7 +21,10 @@ interface NavbarProps {
   activePlan: PricingTier;
   onOpenPricing: () => void;
   onOpenScoring: () => void;
-  onOpenBots: () => void;
+  onOpenSources: () => void;
+  /** Real collection state: null while unknown / not connected. */
+  liveSummary: { enabledSources: number; implementedSources: number; records: number; lastCollectionAt: string | null } | null;
+  explorerBadge?: string;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -29,13 +33,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   activePlan,
   onOpenPricing,
   onOpenScoring,
-  onOpenBots,
+  onOpenSources,
+  liveSummary,
+  explorerBadge,
 }) => {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'explorer', label: 'Problem Explorer', icon: Search, badge: '4.8k' },
+    { id: 'explorer', label: 'Problem Explorer', icon: Search, badge: explorerBadge },
     { id: 'intelligence', label: 'Opportunity Intelligence', icon: FileText },
     { id: 'trends', label: 'Trend Analytics', icon: TrendingUp },
+    { id: 'activity', label: 'Research Activity', icon: Activity },
+    { id: 'sources', label: 'Data Sources', icon: Database },
     { id: 'ai-generator', label: 'AI Opportunity Generator', icon: Sparkles, highlight: true },
   ];
 
@@ -58,9 +66,15 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-lg font-bold tracking-tight text-white">Demand<span className="text-cyan-400">Radar</span></span>
-                <span className="rounded bg-cyan-950/80 px-1.5 py-0.5 text-[10px] font-mono font-medium text-cyan-300 border border-cyan-800/60">
-                  LIVE
-                </span>
+                {liveSummary?.lastCollectionAt ? (
+                  <span className="rounded bg-cyan-950/80 px-1.5 py-0.5 text-[10px] font-mono font-medium text-cyan-300 border border-cyan-800/60">
+                    LIVE DATA
+                  </span>
+                ) : (
+                  <span className="rounded bg-amber-950/60 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-300 border border-amber-800/60">
+                    {liveSummary ? 'NO DATA YET' : 'DEMO'}
+                  </span>
+                )}
               </div>
               <p className="hidden sm:block text-[11px] text-slate-400 -mt-0.5">
                 Discover what the world needs before someone builds it
@@ -68,16 +82,22 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
           </button>
 
-          {/* Bot Swarm Pulse Button */}
+          {/* Real collection status (no simulated activity) */}
           <button
-            onClick={onOpenBots}
+            onClick={onOpenSources}
             className="hidden lg:flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/80 px-2.5 py-1.5 text-xs text-slate-300 hover:border-cyan-500/50 hover:bg-slate-800/80 transition-all cursor-pointer"
-            title="Inspect 10 Autonomous Research Bots"
+            title="Open Data Sources"
           >
-            <Bot className="h-3.5 w-3.5 text-cyan-400" />
-            <span className="font-mono text-cyan-300 font-semibold">10 Bots Active</span>
-            <span className="text-slate-500">|</span>
-            <span className="text-slate-400">529 scans/min</span>
+            <Database className="h-3.5 w-3.5 text-cyan-400" />
+            {liveSummary ? (
+              <>
+                <span className="font-mono text-cyan-300 font-semibold">{liveSummary.enabledSources}/{liveSummary.implementedSources} sources enabled</span>
+                <span className="text-slate-500">|</span>
+                <span className="text-slate-400">{liveSummary.records.toLocaleString()} records</span>
+              </>
+            ) : (
+              <span className="text-slate-400">Collection not connected</span>
+            )}
             <ChevronRight className="h-3 w-3 text-slate-500" />
           </button>
         </div>

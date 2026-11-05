@@ -18,29 +18,49 @@ import {
   Filter,
   DollarSign
 } from 'lucide-react';
-import { Opportunity, BotScout, PricingTier } from '../types';
+import { Opportunity, PricingTier } from '../types';
+import { Overview, SourceInfo, timeAgo } from '../lib/liveData';
+import type { LiveStatus } from '../App';
+
+/** Score cell for live data: never shows 0% for a component that simply has no data, and flags AI estimates. */
+const fmtScore = (opp: Opportunity, key: keyof NonNullable<Opportunity['live']>['basis']): string => {
+  const basis = opp.live?.basis[key];
+  if (basis === 'insufficient_data') return 'n/a';
+  return `${opp.scores[key]}%${basis === 'ai_estimate' ? '*' : ''}`;
+};
 
 interface DashboardViewProps {
   opportunities: Opportunity[];
-  bots: BotScout[];
+  liveStatus: LiveStatus;
+  overview: Overview | null;
+  sources: SourceInfo[];
+  isDemo: boolean;
   onSelectOpportunity: (opp: Opportunity) => void;
   onNavigateTab: (tab: string) => void;
-  onOpenBots: () => void;
+  onOpenSources: () => void;
   onOpenScoring: () => void;
   activePlan: PricingTier;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   opportunities,
-  bots,
+  liveStatus,
+  overview,
+  sources,
+  isDemo,
   onSelectOpportunity,
   onNavigateTab,
-  onOpenBots,
+  onOpenSources,
   onOpenScoring,
   activePlan,
 }) => {
   const topOpportunity = opportunities[0];
   const fastGrowing = [...opportunities].sort((a, b) => b.growthRate - a.growthRate).slice(0, 4);
+  const ov = liveStatus === 'ready' ? overview : null;
+  const dash = '—';
+  const n = (v: number | undefined | null) => (ov && v !== undefined && v !== null ? v.toLocaleString() : dash);
+  const delta = ov && ov.records_prev_24h > 0 ? Math.round(((ov.records_24h - ov.records_prev_24h) / ov.records_prev_24h) * 100) : null;
+  const sourceNames = sources.filter((x) => x.availability === 'implemented' && x.records_total > 0).map((x) => x.name);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -62,7 +82,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </span>
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed max-w-2xl">
-              10 autonomous research bots monitor 48,000+ public discussions across Reddit, X, GitHub, and review platforms daily to extract real human suffering, cluster recurring friction, and score commercial software opportunities.
+              Collectors read public discussions from GitHub, Hacker News and Stack Exchange through their official APIs, extract the underlying problems, group repeats across platforms and score each cluster with transparent, evidence-labelled factors.
             </p>
           </div>
 
@@ -79,7 +99,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-3 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition-all cursor-pointer"
             >
               <Search className="h-4 w-4 text-slate-400" />
-              Explore Database (4,892)
+              Explore Database{ov ? ` (${ov.clusters_total.toLocaleString()})` : ''}
             </button>
           </div>
         </div>
@@ -90,25 +110,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* Metric 1 */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 relative overflow-hidden group hover:border-cyan-500/50 transition-all">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Discovered Today</span>
+            <span>Collected (24h)</span>
             <Search className="h-3.5 w-3.5 text-cyan-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-white">4,892</div>
-          <div className="text-[10px] text-emerald-400 mt-1 flex items-center gap-0.5 font-medium">
-            <ArrowUpRight className="h-3 w-3" />
-            +18.4% vs 24h ago
+          <div className="text-xl sm:text-2xl font-black font-mono text-white">{n(ov?.records_24h)}</div>
+          <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-0.5 font-medium">
+            {!ov ? 'collection not connected' : delta === null ? 'no prior-day baseline yet' : `${delta >= 0 ? '+' : ''}${delta}% vs previous 24h`}
           </div>
         </div>
 
         {/* Metric 2 */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 relative overflow-hidden group hover:border-blue-500/50 transition-all">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Emerging Opps</span>
+            <span>Validated Clusters</span>
             <Sparkles className="h-3.5 w-3.5 text-blue-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-white">142</div>
+          <div className="text-xl sm:text-2xl font-black font-mono text-white">{isDemo ? dash : opportunities.length.toLocaleString()}</div>
           <div className="text-[10px] text-blue-400 mt-1">
-            Score &gt; 80 / 100
+            2+ independent discussions
           </div>
         </div>
 
@@ -118,9 +137,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>Fastest Growing</span>
             <Flame className="h-3.5 w-3.5 text-rose-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-rose-400">+64%</div>
-          <div className="text-[10px] text-slate-400 mt-1 truncate" title="EU AI Act Governance">
-            AI Act Governance
+          <div className="text-xl sm:text-2xl font-black font-mono text-rose-400">{ov?.fastest_growing ? `${ov.fastest_growing.growth_rate > 0 ? '+' : ''}${ov.fastest_growing.growth_rate}%` : dash}</div>
+          <div className="text-[10px] text-slate-400 mt-1 truncate" title={ov?.fastest_growing?.title}>
+            {ov?.fastest_growing ? ov.fastest_growing.title : ov ? 'insufficient history to measure growth' : 'collection not connected'}
           </div>
         </div>
 
@@ -130,37 +149,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>Top Industry</span>
             <BarChart3 className="h-3.5 w-3.5 text-amber-400" />
           </div>
-          <div className="text-base sm:text-lg font-bold text-white truncate" title="Retail & Commerce">
-            Retail & Commerce
+          <div className="text-base sm:text-lg font-bold text-white truncate" title={ov?.top_industry?.industry}>
+            {ov?.top_industry?.industry ?? dash}
           </div>
           <div className="text-[10px] text-amber-400 mt-1 font-mono">
-            4,200 discussions
+            {ov?.top_industry ? `${ov.top_industry.unique_discussions.toLocaleString()} unique discussions` : ov ? 'no clusters yet' : 'collection not connected'}
           </div>
         </div>
 
         {/* Metric 5 */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 relative overflow-hidden group hover:border-emerald-500/50 transition-all">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Market Demand</span>
+            <span>Problem Signals</span>
             <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
           </div>
-          <div className="text-base sm:text-lg font-bold text-emerald-300">
-            High Surge
-          </div>
+          <div className="text-xl sm:text-2xl font-black font-mono text-emerald-300">{n(ov?.problems_total)}</div>
           <div className="text-[10px] text-slate-400 mt-1">
-            12.8k active complaints
+            complaints &amp; unmet needs (not demand)
           </div>
         </div>
 
         {/* Metric 6 */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 relative overflow-hidden group hover:border-purple-500/50 transition-all">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Awaiting Dev</span>
+            <span>AI-Summarised</span>
             <Layers className="h-3.5 w-3.5 text-purple-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-white">38</div>
+          <div className="text-xl sm:text-2xl font-black font-mono text-white">{n(ov?.clusters_summarised)}</div>
           <div className="text-[10px] text-purple-400 mt-1">
-            Ready-to-build PRDs
+            clusters with an AI brief
           </div>
         </div>
       </div>
@@ -174,7 +191,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               The 5-Stage Market Intelligence Pipeline
             </h2>
             <p className="text-xs text-slate-400">
-              How DemandRadar turns 48,000+ raw complaints into validated software opportunities.
+              How DemandRadar turns collected public discussions into scored software opportunities. Figures are live database counts.
             </p>
           </div>
           <button
@@ -190,36 +207,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {
               step: 'A',
               title: 'Problem Extraction',
-              desc: 'Extracts actual human suffering & core friction rather than superficial keywords.',
-              metric: '48.9k discussions scanned',
+              desc: 'Separates genuine complaints, feature requests and unmet needs from ordinary conversation and extracts the underlying problem.',
+              metric: ov ? `${ov.records_total.toLocaleString()} records collected` : 'collection not connected',
               color: 'text-blue-400 border-blue-900/50 bg-blue-950/20'
             },
             {
               step: 'B',
               title: 'Clustering',
               desc: 'Groups similar multi-platform complaints into singular identifiable problem clusters.',
-              metric: '342 active clusters',
+              metric: ov ? `${ov.clusters_total.toLocaleString()} clusters (${ov.clusters_multi_source} cross-platform)` : 'collection not connected',
               color: 'text-cyan-400 border-cyan-900/50 bg-cyan-950/20'
             },
             {
               step: 'C',
               title: 'Demand Analysis',
-              desc: 'Measures discussion volume, complaint frequency, growth curve, and willingness to pay.',
-              metric: '+28% avg growth rate',
+              desc: 'Counts unique discussions, 30-day growth and explicit willingness-to-pay evidence. Mentions alone are never treated as demand.',
+              metric: ov ? `${ov.problems_total.toLocaleString()} problem signals` : 'collection not connected',
               color: 'text-emerald-400 border-emerald-900/50 bg-emerald-950/20'
             },
             {
               step: 'D',
               title: 'Competition Analysis',
-              desc: 'Dissects incumbent gaps, pricing vulnerabilities, and 1-3 star review blindspots.',
-              metric: '50k+ weaknesses catalogued',
+              desc: 'Lists competitors named inside the discussions. No review-site or pricing data is collected.',
+              metric: 'from named mentions only',
               color: 'text-amber-400 border-amber-900/50 bg-amber-950/20'
             },
             {
               step: 'E',
               title: 'Opportunity Scoring',
               desc: 'Generates software solutions, monetization models, and 6-factor composite scores (0-100).',
-              metric: '142 validated PRDs',
+              metric: ov ? `${ov.clusters_summarised.toLocaleString()} AI-summarised` : 'collection not connected',
               color: 'text-purple-400 border-purple-900/50 bg-purple-950/20'
             },
           ].map((item, idx) => (
@@ -298,32 +315,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* 6-Factor Score breakdown mini-pills */}
             <div>
               <div className="text-[11px] font-semibold text-slate-400 mb-2 uppercase tracking-wider">
-                Opportunity Score Breakdown (6-Factor Algorithm)
+                Opportunity Score Breakdown (6-Factor Algorithm){topOpportunity.live ? ' · * = AI estimate · n/a = insufficient data' : ' · demo values'}
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center text-xs">
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
                   <div className="text-[10px] text-slate-400">Frequency</div>
-                  <div className="font-mono font-bold text-cyan-300">{topOpportunity.scores.problemFrequency}%</div>
+                  <div className="font-mono font-bold text-cyan-300">{fmtScore(topOpportunity, 'problemFrequency')}</div>
                 </div>
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
                   <div className="text-[10px] text-slate-400">Demand Growth</div>
-                  <div className="font-mono font-bold text-emerald-300">{topOpportunity.scores.demandGrowth}%</div>
+                  <div className="font-mono font-bold text-emerald-300">{fmtScore(topOpportunity, 'demandGrowth')}</div>
                 </div>
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
                   <div className="text-[10px] text-slate-400">Pain Intensity</div>
-                  <div className="font-mono font-bold text-rose-300">{topOpportunity.scores.painIntensity}%</div>
+                  <div className="font-mono font-bold text-rose-300">{fmtScore(topOpportunity, 'painIntensity')}</div>
                 </div>
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
                   <div className="text-[10px] text-slate-400">Willingness to Pay</div>
-                  <div className="font-mono font-bold text-amber-300">{topOpportunity.scores.willingnessToPay}%</div>
+                  <div className="font-mono font-bold text-amber-300">{fmtScore(topOpportunity, 'willingnessToPay')}</div>
                 </div>
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
                   <div className="text-[10px] text-slate-400">Comp. Gap</div>
-                  <div className="font-mono font-bold text-purple-300">{topOpportunity.scores.competitionGap}%</div>
+                  <div className="font-mono font-bold text-purple-300">{fmtScore(topOpportunity, 'competitionGap')}</div>
                 </div>
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
                   <div className="text-[10px] text-slate-400">Feasibility</div>
-                  <div className="font-mono font-bold text-blue-300">{topOpportunity.scores.developmentFeasibility}%</div>
+                  <div className="font-mono font-bold text-blue-300">{fmtScore(topOpportunity, 'developmentFeasibility')}</div>
                 </div>
               </div>
             </div>
@@ -331,7 +348,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Action Bar */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-800">
               <span className="text-xs text-slate-400">
-                Identified from <strong>4,200 independent complaints</strong> across Reddit, G2, and X.
+                {topOpportunity.live
+                  ? <>Identified from <strong>{topOpportunity.live.uniqueDiscussions} independent discussions</strong> across {topOpportunity.live.sources.join(', ')}.</>
+                  : <strong className="text-amber-300">Demo data — illustrative sample, not collected from real sources.</strong>}
               </span>
               <button
                 onClick={() => onSelectOpportunity(topOpportunity)}
@@ -348,7 +367,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-emerald-400" />
-                Fast-Growing Problem Clusters (Week-over-Week)
+                Fast-Growing Problem Clusters (last 30 days vs prior 30)
               </h3>
               <button
                 onClick={() => onNavigateTab('explorer')}
@@ -408,52 +427,47 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Right Col: Autonomous Scout Swarm Live Telemetry & Accumulated Dataset Advantage */}
         <div className="space-y-4">
-          {/* Swarm Live Telemetry */}
+          {/* Real collection status */}
           <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <Bot className="h-4 w-4 text-cyan-400" />
-                <h3 className="text-sm font-bold text-white">Live Scout Stream</h3>
+                <Database className="h-4 w-4 text-cyan-400" />
+                <h3 className="text-sm font-bold text-white">Collection Sources</h3>
               </div>
-              <button
-                onClick={onOpenBots}
-                className="text-[11px] text-cyan-400 hover:text-cyan-300 font-mono cursor-pointer"
-              >
-                10 Bots [Inspect]
+              <button onClick={onOpenSources} className="text-[11px] text-cyan-400 hover:text-cyan-300 font-mono cursor-pointer">
+                Manage →
               </button>
             </div>
 
+            {liveStatus !== 'ready' && (
+              <p className="text-[11px] text-amber-300">{liveStatus === 'loading' ? 'Loading…' : 'Collection backend not connected — no source is running.'}</p>
+            )}
             <div className="space-y-3">
-              {bots.slice(0, 5).map((bot) => (
-                <div
-                  key={bot.id}
-                  className="rounded-xl border border-slate-800/80 bg-slate-950/60 p-3 space-y-1.5 hover:border-slate-700 transition-all text-xs"
-                >
+              {sources.filter((x) => x.availability === 'implemented').map((src) => (
+                <div key={src.id} className="rounded-xl border border-slate-800/80 bg-slate-950/60 p-3 space-y-1 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-white flex items-center gap-1.5">
-                      <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      {bot.name}
+                      <span className={`h-2 w-2 rounded-full ${src.status === 'idle' && src.last_success_at ? 'bg-emerald-400' : src.status === 'error' ? 'bg-rose-400' : 'bg-slate-600'}`}></span>
+                      {src.name}
                     </span>
-                    <span className="text-[10px] font-mono text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
-                      {bot.platform}
-                    </span>
+                    <span className="text-[10px] font-mono text-slate-400">{src.records_total.toLocaleString()} records</span>
                   </div>
-                  <p className="text-[11px] text-slate-300 italic line-clamp-2">
-                    "{bot.lastFinding}"
-                  </p>
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1">
-                    <span>{bot.speed}</span>
-                    <span className="text-cyan-400 capitalize">{bot.status}</span>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                    <span>{src.last_success_at ? `synced ${timeAgo(src.last_success_at)}` : 'never synced'}</span>
+                    <span className="capitalize">{src.status === 'idle' ? (src.enabled ? 'enabled' : 'disabled') : src.status}</span>
                   </div>
                 </div>
               ))}
+              {sources.filter((x) => x.availability === 'skipped').length > 0 && (
+                <p className="text-[10px] text-slate-500">{sources.filter((x) => x.availability === 'skipped').map((x) => x.name).join(', ')}: not connected (access restrictions documented).</p>
+              )}
             </div>
 
             <button
-              onClick={onOpenBots}
+              onClick={onOpenSources}
               className="w-full py-2 rounded-lg border border-slate-800 bg-slate-950 text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-white transition-all cursor-pointer text-center"
             >
-              View Full 10-Bot Swarm Architecture →
+              Open Data Sources →
             </button>
           </div>
 
@@ -466,24 +480,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </h4>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Don't make the platform an AI idea generator. Make it a <strong>continuously updating database of human problems</strong>.
+              A continuously updating, source-linked database of human problems{sourceNames.length ? ` (so far from ${sourceNames.join(', ')})` : ''}. Live counts:
             </p>
             <div className="space-y-2 text-xs font-mono text-slate-300 bg-slate-950/80 p-3 rounded-xl border border-slate-800">
               <div className="flex justify-between">
-                <span className="text-slate-400">Catalogued Problems:</span>
-                <span className="text-cyan-300 font-bold">100,000+</span>
+                <span className="text-slate-400">Records collected:</span>
+                <span className="text-cyan-300 font-bold">{n(ov?.records_total)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Competitor Weaknesses:</span>
-                <span className="text-amber-300 font-bold">50,000+</span>
+                <span className="text-slate-400">Problem signals:</span>
+                <span className="text-amber-300 font-bold">{n(ov?.problems_total)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Validated Market Opps:</span>
-                <span className="text-emerald-300 font-bold">14,200</span>
+                <span className="text-slate-400">Cross-platform clusters:</span>
+                <span className="text-emerald-300 font-bold">{n(ov?.clusters_multi_source)}</span>
               </div>
             </div>
             <p className="text-[11px] text-slate-400">
-              AI-generated ideas are cheap. Reliable, verified market intelligence is priceless.
+              Every cluster links back to its original discussions; measured statistics and AI estimates are labelled separately.
             </p>
           </div>
         </div>

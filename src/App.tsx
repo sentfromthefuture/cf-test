@@ -6,21 +6,46 @@ import { OpportunityIntelligenceView } from './components/OpportunityIntelligenc
 import { TrendAnalyticsView } from './components/TrendAnalyticsView';
 import { AiGeneratorView } from './components/AiGeneratorView';
 import { ScoringCalculatorModal } from './components/ScoringCalculatorModal';
-import { BotSwarmModal } from './components/BotSwarmModal';
+import { DataSourcesView } from './components/DataSourcesView';
+import { ResearchActivityView } from './components/ResearchActivityView';
 import { PricingModal } from './components/PricingModal';
 import { PaymentModal } from './components/PaymentModal';
 import { supabase } from './lib/supabase';
 import { canOpenOpportunity } from './lib/access';
-import { Opportunity, BotScout, ScoringWeights, PricingTier } from './types';
-import { INITIAL_OPPORTUNITIES, INITIAL_BOTS, DEFAULT_WEIGHTS, calculateCustomScore } from './data/mockData';
-import { Radar, Bot, Sparkles, Sliders, Crown, Layers, ArrowUpRight } from 'lucide-react';
+import { Opportunity, ScoringWeights, PricingTier } from './types';
+import { Activity, clusterToOpportunity, ClusterRow, fetchActivity, fetchClusters, fetchEvidence, fetchIsAdmin, fetchOverview, fetchRecentSignals, fetchSources, Overview, RecentSignal, SourceInfo } from './lib/liveData';
+import { INITIAL_OPPORTUNITIES, DEFAULT_WEIGHTS, calculateCustomScore } from './data/mockData';
+import { Radar, Database, Sliders, Crown, FlaskConical } from 'lucide-react';
+
+export type LiveStatus = 'loading' | 'unavailable' | 'ready';
+
+/** Weighted mean over the components that actually have data (same rule the database uses for the stored composite). */
+const recompute = (opp: Opportunity, w: ScoringWeights): number => {
+  if (!opp.live) return calculateCustomScore(opp.scores, w);
+  const keys = ['problemFrequency', 'demandGrowth', 'painIntensity', 'willingnessToPay', 'competitionGap', 'developmentFeasibility'] as const;
+  let acc = 0, wsum = 0;
+  for (const k of keys) {
+    if (opp.live.basis[k] === 'insufficient_data') continue;
+    acc += w[k] * opp.scores[k];
+    wsum += w[k];
+  }
+  return wsum > 0 ? Math.round(acc / wsum) : 0;
+};
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [opportunities, setOpportunities] = useState<Opportunity[]>(INITIAL_OPPORTUNITIES);
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity>(INITIAL_OPPORTUNITIES[0]);
-  const [bots, setBots] = useState<BotScout[]>(INITIAL_BOTS);
+  // ---- live collection data (real database queries; demo opportunities are only a labelled fallback)
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>('loading');
+  const [sources, setSources] = useState<SourceInfo[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [activity, setActivity] = useState<Activity | null>(null);
+  const [recent, setRecent] = useState<RecentSignal[]>([]);
+  const [emerging, setEmerging] = useState<ClusterRow[]>([]);
+  const [isDemo, setIsDemo] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [activePlan, setActivePlan] = useState<PricingTier>('Free');
   const [signedIn, setSignedIn] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -49,9 +74,54 @@ export default function App() {
     return () => { alive = false; sub.subscription.unsubscribe(); };
   }, []);
 
+  const weightsRef = React.useRef(weights);
+  weightsRef.current = weights;
+
+  const loadLive = React.useCallback(async () => {
+    const [src, ov, act, rec, clusters, emerg] = await Promise.allSettled([
+      fetchSources(), fetchOverview(), fetchActivity(14), fetchRecentSignals(10, 0),
+      fetchClusters({ minDiscussions: 2, limit: 50, order: 'score' }), fetchClusters({ minDiscussions: 2, limit: 5, order: 'growth' }),
+    ]);
+    if (src.status === 'rejected' && ov.status === 'rejected') { setLiveStatus('unavailable'); return; }
+    if (src.status === 'fulfilled') setSources(src.value);
+    if (ov.status === 'fulfilled') setOverview(ov.value);
+    if (act.status === 'fulfilled') setActivity(act.value);
+    if (rec.status === 'fulfilled') setRecent(rec.value);
+    if (emerg.status === 'fulfilled') setEmerging(emerg.value.items);
+    setLiveStatus('ready');
+    if (clusters.status === 'fulfilled' && clusters.value.items.length > 0) {
+      const live = clusters.value.items.map(clusterToOpportunity).map((o) => ({ ...o, scores: { ...o.scores, compositeScore: recompute(o, weightsRef.current) } }));
+      setOpportunities(live);
+      setSelectedOpportunity((cur) => live.find((o) => o.id === cur.id) ?? live[0]);
+      setIsDemo(false);
+    } else {
+      setOpportunities(INITIAL_OPPORTUNITIES);
+      setSelectedOpportunity((cur) => INITIAL_OPPORTUNITIES.find((o) => o.id === cur.id) ?? INITIAL_OPPORTUNITIES[0]);
+      setIsDemo(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLive();
+    const t = setInterval(() => { if (document.visibilityState === 'visible') loadLive(); }, 60_000);
+    return () => clearInterval(t);
+  }, [loadLive]);
+
+  useEffect(() => { if (signedIn) fetchIsAdmin().then(setIsAdmin); else setIsAdmin(false); }, [signedIn]);
+
+  // Source excerpts for a live cluster are loaded on demand (sign-in required server-side).
+  useEffect(() => {
+    const opp = selectedOpportunity;
+    if (!signedIn || !opp.live || opp.evidence.length > 0) return;
+    let alive = true;
+    fetchEvidence(opp.live.clusterId).then((evidence) => {
+      if (alive) setSelectedOpportunity((cur) => (cur.id === opp.id ? { ...cur, evidence } : cur));
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [selectedOpportunity.id, signedIn]);
+
   // Modals
   const [isScoringOpen, setIsScoringOpen] = useState(false);
-  const [isBotsOpen, setIsBotsOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [checkoutTier, setCheckoutTier] = useState<PricingTier>('Pro');
@@ -60,7 +130,7 @@ export default function App() {
   const handleUpdateWeights = (newWeights: ScoringWeights) => {
     setWeights(newWeights);
     const updated = opportunities.map((opp) => {
-      const newScore = calculateCustomScore(opp.scores, newWeights);
+      const newScore = recompute(opp, newWeights);
       return {
         ...opp,
         scores: {
@@ -80,7 +150,7 @@ export default function App() {
   // Select opportunity and switch directly to Intelligence dossier view
   // Free plan: scoring tools, scout bots and all but the top 3 dossiers lead to the pricing screen.
   const openScoring = () => (activePlan === 'Free' ? setIsPricingOpen(true) : setIsScoringOpen(true));
-  const openBots = () => (activePlan === 'Free' ? setIsPricingOpen(true) : setIsBotsOpen(true));
+  const openSources = () => { setCurrentTab('sources'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   const handleSelectOpportunity = (opp: Opportunity) => {
     if (!canOpenOpportunity(activePlan, opp, opportunities)) { setIsPricingOpen(true); return; }
     setSelectedOpportunity(opp);
@@ -97,18 +167,37 @@ export default function App() {
         activePlan={activePlan}
         onOpenPricing={() => setIsPricingOpen(true)}
         onOpenScoring={() => openScoring()}
-        onOpenBots={() => openBots()}
+        onOpenSources={openSources}
+        liveSummary={liveStatus === 'ready' && overview ? { enabledSources: overview.enabled_sources, implementedSources: overview.implemented_sources, records: overview.records_total, lastCollectionAt: overview.last_collection_at } : null}
+        explorerBadge={liveStatus === 'ready' && !isDemo ? String(opportunities.length) : undefined}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
+        {isDemo && ['dashboard', 'explorer', 'intelligence', 'trends'].includes(currentTab) && (
+          <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2 rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 text-xs text-amber-200">
+            <FlaskConical className="h-4 w-4 shrink-0" />
+            <p className="flex-1">
+              <strong>Demo data.</strong>{' '}
+              {liveStatus === 'unavailable'
+                ? 'The collection backend is not connected, so the opportunities, trends and evidence shown are illustrative samples, not collected from real sources.'
+                : liveStatus === 'loading'
+                  ? 'Loading collected data…'
+                  : `No problem cluster has two or more independent discussions yet${overview ? ` (${overview.records_total.toLocaleString()} records collected so far)` : ''}. Opportunities, trends and evidence below are illustrative samples, not collected data.`}
+            </p>
+            <button onClick={openSources} className="rounded-lg border border-amber-700/60 px-2.5 py-1 font-semibold hover:bg-amber-900/40 cursor-pointer whitespace-nowrap">Data Sources</button>
+          </div>
+        )}
         {currentTab === 'dashboard' && (
           <DashboardView
             opportunities={opportunities}
-            bots={bots}
+            liveStatus={liveStatus}
+            overview={overview}
+            sources={sources}
+            isDemo={isDemo}
             onSelectOpportunity={handleSelectOpportunity}
             onNavigateTab={setCurrentTab}
-            onOpenBots={() => openBots()}
+            onOpenSources={openSources}
             onOpenScoring={() => openScoring()}
             activePlan={activePlan}
           />
@@ -139,7 +228,15 @@ export default function App() {
         )}
 
         {currentTab === 'trends' && (
-          <TrendAnalyticsView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} />
+          <TrendAnalyticsView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} isDemo={isDemo} overview={overview} />
+        )}
+
+        {currentTab === 'activity' && (
+          <ResearchActivityView status={liveStatus} overview={overview} activity={activity} recent={recent} emerging={emerging} onOpenSources={openSources} />
+        )}
+
+        {currentTab === 'sources' && (
+          <DataSourcesView sources={sources} status={liveStatus} isAdmin={isAdmin} signedIn={signedIn} onRefresh={loadLive} onOpenAuth={() => setIsAuthOpen(true)} />
         )}
 
         {currentTab === 'ai-generator' && (
@@ -153,12 +250,6 @@ export default function App() {
         onClose={() => setIsScoringOpen(false)}
         weights={weights}
         onUpdateWeights={handleUpdateWeights}
-      />
-
-      <BotSwarmModal
-        isOpen={isBotsOpen}
-        onClose={() => setIsBotsOpen(false)}
-        bots={bots}
       />
 
       <PricingModal
@@ -207,11 +298,11 @@ export default function App() {
 
             <div className="flex flex-wrap items-center gap-3">
               <button
-                onClick={() => openBots()}
+                onClick={openSources}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-300 hover:text-white hover:border-slate-700 transition-colors cursor-pointer"
               >
-                <Bot className="h-3.5 w-3.5 text-cyan-400" />
-                10 Autonomous Bots
+                <Database className="h-3.5 w-3.5 text-cyan-400" />
+                Data Sources
               </button>
               <button
                 onClick={() => openScoring()}
@@ -250,7 +341,9 @@ export default function App() {
             <div>
               <span className="text-slate-300 font-semibold block mb-1">Accumulated Data Advantage</span>
               <p>
-                A continuously updating repository of 100,000 human problems, 50,000 competitor vulnerabilities, and historical demand shifts across Reddit, X, GitHub, and review portals.
+                {liveStatus === 'ready' && overview
+                  ? `${overview.records_total.toLocaleString()} public discussions collected so far (${overview.problems_total.toLocaleString()} classified as problem signals) from ${overview.by_source.filter((s) => s.records > 0).map((s) => s.name).join(', ') || 'no source yet'}. Every record links back to its original source.`
+                  : 'A source-linked repository of public discussions and the problems extracted from them. Collection status is shown on the Data Sources tab.'}
               </p>
             </div>
 
@@ -263,8 +356,8 @@ export default function App() {
           </div>
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-4 border-t border-slate-900/80 text-[10px] text-slate-600">
-            <span>© 2026 DemandRadar Systems. Autonomous research bots operate under public API compliance.</span>
-            <span className="font-mono text-cyan-500/80">Signal-to-Noise Ratio: 99.4% Verified</span>
+            <span>© 2026 DemandRadar Systems. Collectors use official public APIs only, within each platform's terms and quotas.</span>
+            <span className="font-mono text-slate-500">{overview ? `${overview.pending_analysis.toLocaleString()} records awaiting analysis` : 'collection status: not connected'}</span>
           </div>
         </div>
       </footer>

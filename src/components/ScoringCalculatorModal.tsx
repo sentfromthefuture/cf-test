@@ -30,7 +30,7 @@ export const ScoringCalculatorModal: React.FC<ScoringCalculatorModalProps> = ({
     {
       key: 'problemFrequency' as keyof ScoringWeights,
       label: 'Problem Frequency',
-      desc: 'Raw volume of independent recurring discussions across Reddit, X, and forums',
+      desc: 'Raw volume of independent recurring discussions across GitHub, Hacker News and Stack Exchange',
       color: 'from-blue-500 to-cyan-500',
     },
     {

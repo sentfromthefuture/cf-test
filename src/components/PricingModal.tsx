@@ -55,7 +55,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Full competitor vulnerability matrix', included: false },
         { text: 'Development-ready PRD specifications', included: false },
         { text: 'Export research (Markdown / JSON)', included: false },
-        { text: 'Autonomous scout bot custom alerts', included: false },
+        { text: 'Custom cluster alerts (coming soon)', included: false },
       ],
     },
     {
@@ -71,7 +71,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Limited competitor analysis', included: true },
         { text: 'Development-ready PRD specifications', included: false },
         { text: 'Export research (Markdown / JSON)', included: false },
-        { text: 'Autonomous scout bot custom alerts', included: false },
+        { text: 'Custom cluster alerts (coming soon)', included: false },
       ],
     },
     {
@@ -101,7 +101,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       features: [
         { text: 'Everything in Pro tier', included: true },
         { text: 'Direct REST API access to problem database (coming soon)', included: true },
-        { text: 'Custom keyword & sub-reddit tracking bots (coming soon)', included: true },
+        { text: 'Custom keyword tracking (coming soon)', included: true },
         { text: 'Raw sentiment & discussion dumps', included: true },
         { text: 'White-label client presentation briefs', included: true },
         { text: 'Priority Gemini PRD generation queue', included: true },

@@ -82,7 +82,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Searchable repository of recurring human pain points extracted by autonomous scout bots.
+            Searchable repository of recurring human pain points extracted from collected public discussions.
           </p>
         </div>
 

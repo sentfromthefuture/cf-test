@@ -1,0 +1,150 @@
+import { RawRecordInput } from './types.ts';
+import { SignalOutput, PendingRecord } from './ai.ts';
+import { sleep } from './util.ts';
+
+export interface ClaimedSource {
+  id: string;
+  config: Record<string, any>;
+  cursor: Record<string, any>;
+  interval_minutes: number;
+  run_id: string;
+}
+
+export interface RunStats {
+  requests: number;
+  fetched: number;
+  inserted: number;
+  updated: number;
+  duplicates: number;
+  errors: number;
+  details?: Record<string, unknown>;
+}
+
+export interface UpsertResult {
+  total: number;
+  inserted: number;
+  updated: number;
+  duplicates: number;
+  invalid: number;
+}
+
+/** Everything the engine needs from persistence. SupabaseStore is the production implementation. */
+export interface Store {
+  claimDueSources(o: { limit: number; force?: string | null; trigger: 'schedule' | 'manual'; lockSeconds: number }): Promise<ClaimedSource[]>;
+  finishRun(o: { runId: string; sourceId: string; status: 'success' | 'partial' | 'error'; cursor: Record<string, unknown> | null; stats: RunStats; error: string | null; nextRunAt: Date | null }): Promise<void>;
+  noteUsage(sourceId: string, usage: { requests: number; errors: number; rateLimited: number }): Promise<void>;
+  setQuota(sourceId: string, q: { limit: number | null; remaining: number | null; resetAt: string | null }): Promise<void>;
+  existingIds(sourceId: string, ids: string[]): Promise<Set<string>>;
+  upsertRecords(records: RawRecordInput[]): Promise<UpsertResult>;
+  acquireLock(name: string, seconds: number): Promise<boolean>;
+  releaseLock(name: string): Promise<void>;
+  claimPending(limit: number): Promise<PendingRecord[]>;
+  markSkipped(ids: string[]): Promise<void>;
+  markFailed(ids: string[]): Promise<void>;
+  saveSignals(signals: SignalOutput[]): Promise<number>;
+  assignPendingClusters(limit: number, threshold: number, trgmThreshold: number): Promise<number>;
+  refreshClusters(limit: number): Promise<number>;
+  clustersNeedingSummary(limit: number): Promise<Array<{ id: string; statements: string[] }>>;
+  saveClusterSummary(id: string, summary: unknown): Promise<void>;
+}
+
+/** PostgREST RPC client using the service-role key (server-side only; never shipped to the browser). */
+export class SupabaseStore implements Store {
+  constructor(private url: string, private serviceKey: string, private fetchImpl: typeof fetch = fetch) {}
+
+  private async rpc<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+    let lastErr: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 25_000);
+        let res: Response;
+        try {
+          res = await this.fetchImpl(`${this.url.replace(/\/$/, '')}/rest/v1/rpc/${name}`, {
+            method: 'POST',
+            headers: { apikey: this.serviceKey, authorization: `Bearer ${this.serviceKey}`, 'content-type': 'application/json' },
+            body: JSON.stringify(args),
+            signal: ctl.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (res.ok) {
+          const text = await res.text();
+          return (text ? JSON.parse(text) : null) as T;
+        }
+        const body = await res.text().catch(() => '');
+        let msg = body.slice(0, 200);
+        try {
+          msg = JSON.parse(body).message ?? msg;
+        } catch { /* keep raw snippet */ }
+        lastErr = new Error(`rpc ${name} failed (HTTP ${res.status}): ${msg}`);
+        if (res.status < 500 && res.status !== 429) throw lastErr; // client errors are not retryable
+      } catch (e) {
+        lastErr = e as Error;
+        if (/HTTP 4\d\d/.test(lastErr.message) && !/HTTP 429/.test(lastErr.message)) throw lastErr;
+      }
+      await sleep(400 * 2 ** attempt);
+    }
+    throw lastErr ?? new Error(`rpc ${name} failed`);
+  }
+
+  async claimDueSources(o: { limit: number; force?: string | null; trigger: 'schedule' | 'manual'; lockSeconds: number }) {
+    return (await this.rpc<ClaimedSource[]>('dr_claim_due_sources', { p_limit: o.limit, p_force: o.force ?? null, p_lock_seconds: o.lockSeconds, p_trigger: o.trigger })) ?? [];
+  }
+  async finishRun(o: { runId: string; sourceId: string; status: 'success' | 'partial' | 'error'; cursor: Record<string, unknown> | null; stats: RunStats; error: string | null; nextRunAt: Date | null }) {
+    await this.rpc('dr_finish_run', { p_run: o.runId, p_source: o.sourceId, p_status: o.status, p_cursor: o.cursor, p_stats: o.stats, p_error: o.error, p_next_run_at: o.nextRunAt?.toISOString() ?? null });
+  }
+  async noteUsage(sourceId: string, u: { requests: number; errors: number; rateLimited: number }) {
+    await this.rpc('dr_note_usage', { p_source: sourceId, p_requests: u.requests, p_errors: u.errors, p_rate_limited: u.rateLimited });
+  }
+  async setQuota(sourceId: string, q: { limit: number | null; remaining: number | null; resetAt: string | null }) {
+    await this.rpc('dr_set_quota', { p_source: sourceId, p_limit: q.limit, p_remaining: q.remaining, p_reset: q.resetAt });
+  }
+  async existingIds(sourceId: string, ids: string[]) {
+    const out = new Set<string>();
+    for (let i = 0; i < ids.length; i += 500) {
+      const found = await this.rpc<string[]>('dr_existing_ids', { p_source: sourceId, p_ids: ids.slice(i, i + 500) });
+      for (const f of found ?? []) out.add(f);
+    }
+    return out;
+  }
+  async upsertRecords(records: RawRecordInput[]): Promise<UpsertResult> {
+    const agg: UpsertResult = { total: 0, inserted: 0, updated: 0, duplicates: 0, invalid: 0 };
+    for (let i = 0; i < records.length; i += 100) {
+      const r = await this.rpc<UpsertResult>('dr_upsert_records', { p_records: records.slice(i, i + 100) });
+      agg.total += r.total; agg.inserted += r.inserted; agg.updated += r.updated; agg.duplicates += r.duplicates; agg.invalid += r.invalid;
+    }
+    return agg;
+  }
+  async acquireLock(name: string, seconds: number) {
+    return (await this.rpc<boolean>('dr_acquire_lock', { p_name: name, p_seconds: seconds })) === true;
+  }
+  async releaseLock(name: string) {
+    await this.rpc('dr_release_lock', { p_name: name });
+  }
+  async claimPending(limit: number) {
+    return (await this.rpc<PendingRecord[]>('dr_claim_pending_records', { p_limit: limit })) ?? [];
+  }
+  async markSkipped(ids: string[]) {
+    if (ids.length) await this.rpc('dr_mark_skipped', { p_ids: ids });
+  }
+  async markFailed(ids: string[]) {
+    if (ids.length) await this.rpc('dr_mark_analysis_failed', { p_ids: ids });
+  }
+  async saveSignals(signals: SignalOutput[]) {
+    return signals.length ? (await this.rpc<number>('dr_save_signals', { p_signals: signals })) ?? 0 : 0;
+  }
+  async assignPendingClusters(limit: number, threshold: number, trgmThreshold: number) {
+    return (await this.rpc<number>('dr_assign_pending_clusters', { p_limit: limit, p_threshold: threshold, p_trgm_threshold: trgmThreshold })) ?? 0;
+  }
+  async refreshClusters(limit: number) {
+    return (await this.rpc<number>('dr_refresh_clusters', { p_limit: limit })) ?? 0;
+  }
+  async clustersNeedingSummary(limit: number) {
+    return (await this.rpc<Array<{ id: string; statements: string[] }>>('dr_clusters_needing_summary', { p_limit: limit, p_min_members: 3 })) ?? [];
+  }
+  async saveClusterSummary(id: string, summary: unknown) {
+    await this.rpc('dr_save_cluster_summary', { p_cluster: id, p_summary: summary });
+  }
+}

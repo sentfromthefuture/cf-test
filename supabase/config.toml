@@ -1,0 +1,6 @@
+project_id = "wgoiukbgrdyjvfpqaipp"
+
+# The collect function authenticates itself (shared secret for the scheduler, admin check for manual sync),
+# so the platform-level JWT check must be off.
+[functions.collect]
+verify_jwt = false

@@ -456,7 +456,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 Detailed Competitor Vulnerability Matrix is Gated
               </h3>
               <p className="text-xs text-slate-300 max-w-md mb-4">
-                Pro subscribers get complete teardowns of competitor pricing, fatal UX bugs reported on G2/Trustpilot, and exact positioning wedges.
+                Pro subscribers get complete competitor breakdowns (competitors named in the discussions) and positioning wedges.
               </p>
               <div className="flex items-center gap-3">
                 <button
@@ -494,7 +494,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 Raw Discussion Evidence & Quotes
               </h3>
               <p className="text-xs text-slate-400">
-                Direct quote snippets indexed and validated by Reddit Scout and Review Scout.
+                Source excerpts, each linked to its original discussion with licence and attribution.
               </p>
             </div>
             <div className="flex items-center gap-2">
