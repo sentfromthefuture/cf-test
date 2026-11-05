@@ -66,6 +66,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-lg font-bold tracking-tight text-white">Demand<span className="text-cyan-400">Radar</span></span>
+                <button onClick={onOpenSources} title="Open Data Sources" aria-label="Open Data Sources" className="cursor-pointer">
                 {liveSummary?.lastCollectionAt ? (
                   <span className="rounded bg-cyan-950/80 px-1.5 py-0.5 text-[10px] font-mono font-medium text-cyan-300 border border-cyan-800/60">
                     LIVE DATA
@@ -75,6 +76,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     {liveSummary ? 'NO DATA YET' : 'DEMO'}
                   </span>
                 )}
+                </button>
               </div>
               <p className="hidden sm:block text-[11px] text-slate-400 -mt-0.5">
                 Discover what the world needs before someone builds it
