@@ -1,5 +1,5 @@
 import { embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, PendingRecord, SignalOutput, summariseCluster, worthAnalysing } from './ai.ts';
-import { Logger } from './types.ts';
+import { HttpError, Logger, RateLimitError } from './types.ts';
 import { safeError } from './util.ts';
 import { Store } from './store.ts';
 
@@ -39,10 +39,25 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
     return stats;
   }
   stats.ran = true;
+  // After a quota / rate-limit error the AI is paused for 15 minutes so the scheduler does not keep hitting an exhausted key.
+  const quotaHit = (e: unknown) => e instanceof RateLimitError || (e instanceof HttpError && e.status === 429);
+  const startCooldown = async () => {
+    await d.store.releaseLock('llm-cooldown').catch(() => undefined);
+    await d.store.acquireLock('llm-cooldown', 900).catch(() => undefined);
+  };
+  let paused = false;
+  if (d.gemini) {
+    const free = await d.store.acquireLock('llm-cooldown', 1);
+    if (free) await d.store.releaseLock('llm-cooldown').catch(() => undefined);
+    else {
+      paused = true;
+      stats.note = 'AI analysis is paused for a few minutes after a quota/rate-limit error; it resumes automatically';
+    }
+  }
   try {
     const llmBatch = 12;
     // Each AI batch can take up to ~35s (call + one retry), so only start one if there is clearly time to finish it.
-    while (d.timeLeftMs() > (d.gemini ? 45_000 : 25_000)) {
+    while (!paused && d.timeLeftMs() > (d.gemini ? 45_000 : 25_000)) {
       const pending = await d.store.claimPending(d.gemini ? 36 : 100);
       if (pending.length === 0) break;
       stats.claimed += pending.length;
@@ -75,6 +90,7 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
               // Systemic failure (retired model, bad key, quota, outage): leave records pending untouched so nothing is lost
               // or permanently marked failed; report it and stop hammering the API this run.
               d.log.warn('llm batch failed', { error: safeError(outcome.reason) });
+              if (quotaHit(outcome.reason)) await startCooldown();
               stats.failed += group[k].length;
               stats.note = `LLM errors: ${safeError(outcome.reason)}`;
               llmDown = true;
@@ -89,6 +105,7 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
             probs.forEach((s, i) => (s.embedding = embs[i]));
           } catch (e) {
             d.log.warn('embedding failed - falling back to lexical clustering for this batch', { error: safeError(e) });
+            if (quotaHit(e)) { await startCooldown(); llmDown = true; }
             stats.note = `embedding errors: ${safeError(e)}`;
           }
         }
@@ -110,7 +127,7 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
       if (n < 200) break;
     }
 
-    if (d.gemini && d.timeLeftMs() > 20_000) {
+    if (d.gemini && !paused && !stats.note?.startsWith('LLM errors') && d.timeLeftMs() > 20_000) {
       const need = await d.store.clustersNeedingSummary(2);
       for (const c of need) {
         if (d.timeLeftMs() < 12_000) break;
@@ -122,6 +139,11 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
           }
         } catch (e) {
           d.log.warn('cluster summary failed', { error: safeError(e) });
+          if (quotaHit(e)) {
+            await startCooldown();
+            stats.note = `AI quota/rate limit reached while summarising: ${safeError(e)}`;
+            break;
+          }
         }
       }
       if (stats.summaries) stats.clustersRefreshed += await d.store.refreshClusters(50);

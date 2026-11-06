@@ -71,32 +71,76 @@ export interface GeminiConfig {
   model: string;
   embeddingModel: string;
   http: HttpClient;
+  /** Defaults to 'gemini'. 'openrouter' uses OpenRouter's OpenAI-compatible chat + embeddings endpoints. */
+  provider?: 'gemini' | 'openrouter';
 }
 
-export function geminiConfigFromEnv(env: Record<string, string | undefined>, http: HttpClient): GeminiConfig | null {
+/**
+ * Picks the AI provider from environment secrets. Returns null when no AI is configured (keyword fallback is used).
+ * Misconfiguration (e.g. LLM_PROVIDER=openrouter without a model) throws so it shows up in the sync message instead of silently degrading.
+ */
+export function llmConfigFromEnv(env: Record<string, string | undefined>, http: HttpClient): GeminiConfig | null {
+  const provider = (env.LLM_PROVIDER || 'gemini').trim().toLowerCase();
+  if (provider === 'openrouter') {
+    if (!env.OPENROUTER_API_KEY) throw new Error('LLM_PROVIDER=openrouter but OPENROUTER_API_KEY is not set');
+    if (!env.OPENROUTER_MODEL) throw new Error('LLM_PROVIDER=openrouter but OPENROUTER_MODEL is not set (choose a model id on openrouter.ai/models)');
+    return { provider: 'openrouter', apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL, embeddingModel: env.OPENROUTER_EMBEDDING_MODEL || 'openai/text-embedding-3-small', http };
+  }
+  if (provider !== 'gemini') throw new Error(`unknown LLM_PROVIDER "${provider}" (use "gemini" or "openrouter")`);
   if (!env.GEMINI_API_KEY) return null;
-  return { apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.5-flash', embeddingModel: env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001', http };
+  return { provider: 'gemini', apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.5-flash', embeddingModel: env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001', http };
 }
+export const geminiConfigFromEnv = llmConfigFromEnv;
 
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+const OPENROUTER = 'https://openrouter.ai/api/v1';
 
-async function geminiJson(cfg: GeminiConfig, system: string, userPayload: unknown): Promise<unknown> {
-  const { data } = await cfg.http.postJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>(
-    `${GEMINI}/models/${cfg.model}:generateContent`,
-    {
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: JSON.stringify(userPayload) }] }],
-      generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
-    },
-    { headers: { 'x-goog-api-key': cfg.apiKey }, minIntervalKey: 'gemini' }, // header, not query string: keeps the key out of URLs and logs
-  );
-  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-  if (!text) throw new Error('LLM returned no content');
+/** JSON from a model: tolerates ```json fences and stray prose around the object. */
+export function parseJsonLoose(text: string): unknown {
+  const t = text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
   try {
-    return JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+    return JSON.parse(t);
   } catch {
+    const i = t.indexOf('{');
+    const j = t.lastIndexOf('}');
+    if (i >= 0 && j > i) {
+      try {
+        return JSON.parse(t.slice(i, j + 1));
+      } catch { /* fall through */ }
+    }
     throw new Error('LLM returned malformed JSON');
   }
+}
+
+async function llmJson(cfg: GeminiConfig, system: string, userPayload: unknown): Promise<unknown> {
+  let text = '';
+  if (cfg.provider === 'openrouter') {
+    const { data } = await cfg.http.postJson<{ choices?: Array<{ message?: { content?: string | null } }>; error?: { message?: string } }>(
+      `${OPENROUTER}/chat/completions`,
+      {
+        model: cfg.model,
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(userPayload) }],
+      },
+      { headers: { authorization: `Bearer ${cfg.apiKey}`, 'x-title': 'DemandRadar' }, minIntervalKey: 'llm' },
+    );
+    if (data?.error) throw new Error(`OpenRouter error: ${String(data.error.message ?? 'unknown').slice(0, 200)}`);
+    text = data?.choices?.[0]?.message?.content ?? '';
+  } else {
+    const { data } = await cfg.http.postJson<{ candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }>(
+      `${GEMINI}/models/${cfg.model}:generateContent`,
+      {
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: JSON.stringify(userPayload) }] }],
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
+      },
+      { headers: { 'x-goog-api-key': cfg.apiKey }, minIntervalKey: 'llm' }, // header, not query string: keeps the key out of URLs and logs
+    );
+    text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  }
+  if (!text) throw new Error('LLM returned no content');
+  return parseJsonLoose(text);
 }
 
 const ANALYSE_SYSTEM = `You analyse public online posts for a market-research tool that finds real, unmet problems people have.
@@ -143,7 +187,7 @@ export function validateLlmResult(raw: any, rec: PendingRecord, model: string): 
 /** Returns one output per input (or null where the model's answer was unusable). */
 export async function llmAnalyse(cfg: GeminiConfig, records: PendingRecord[]): Promise<Array<SignalOutput | null>> {
   const items = records.map((r, i) => ({ i, source: r.source_id, kind: r.kind, title: r.title ?? '', text: (r.excerpt ?? '').slice(0, 800) }));
-  const out = (await geminiJson(cfg, ANALYSE_SYSTEM, { items })) as { results?: any[] };
+  const out = (await llmJson(cfg, ANALYSE_SYSTEM, { items })) as { results?: any[] };
   if (!out || !Array.isArray(out.results)) throw new Error('LLM response missing results array');
   const byIndex = new Map<number, any>();
   for (const r of out.results) if (r && Number.isInteger(r.i)) byIndex.set(r.i, r);
@@ -155,20 +199,29 @@ export function toUnit(v: number[]): number[] {
   return norm > 0 ? v.map((x) => x / norm) : v;
 }
 
-/** 768-dim unit-length embeddings (Gemini recommends manual normalisation below 3072 dims). */
+/** 768-dim unit-length embeddings (both providers: normalised manually, dimensions pinned to the database column). */
 export async function embedTexts(cfg: GeminiConfig, texts: string[]): Promise<Array<number[] | null>> {
   const out: Array<number[] | null> = [];
+  const valid = (v: unknown) => (Array.isArray(v) && v.length === 768 && v.every((x) => Number.isFinite(x)) ? toUnit(v as number[]) : null);
   for (let i = 0; i < texts.length; i += 100) {
     const chunk = texts.slice(i, i + 100);
-    const { data } = await cfg.http.postJson<{ embeddings?: Array<{ values?: number[] }> }>(
-      `${GEMINI}/models/${cfg.embeddingModel}:batchEmbedContents`,
-      { requests: chunk.map((t) => ({ model: `models/${cfg.embeddingModel}`, content: { parts: [{ text: t }] }, taskType: 'CLUSTERING', outputDimensionality: 768 })) },
-      { headers: { 'x-goog-api-key': cfg.apiKey }, minIntervalKey: 'gemini' },
-    );
-    if (!data || !Array.isArray(data.embeddings) || data.embeddings.length !== chunk.length) throw new Error('embedding response shape mismatch');
-    for (const e of data.embeddings) {
-      const v = e?.values;
-      out.push(Array.isArray(v) && v.length === 768 && v.every((x) => Number.isFinite(x)) ? toUnit(v) : null);
+    if (cfg.provider === 'openrouter') {
+      const { data } = await cfg.http.postJson<{ data?: Array<{ embedding?: number[]; index?: number }> }>(
+        `${OPENROUTER}/embeddings`,
+        { model: cfg.embeddingModel, input: chunk, dimensions: 768 },
+        { headers: { authorization: `Bearer ${cfg.apiKey}`, 'x-title': 'DemandRadar' }, minIntervalKey: 'llm' },
+      );
+      const rows = Array.isArray(data?.data) ? [...data!.data!].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)) : [];
+      if (rows.length !== chunk.length) throw new Error('embedding response shape mismatch');
+      for (const r of rows) out.push(valid(r?.embedding));
+    } else {
+      const { data } = await cfg.http.postJson<{ embeddings?: Array<{ values?: number[] }> }>(
+        `${GEMINI}/models/${cfg.embeddingModel}:batchEmbedContents`,
+        { requests: chunk.map((t) => ({ model: `models/${cfg.embeddingModel}`, content: { parts: [{ text: t }] }, taskType: 'CLUSTERING', outputDimensionality: 768 })) },
+        { headers: { 'x-goog-api-key': cfg.apiKey }, minIntervalKey: 'llm' },
+      );
+      if (!data || !Array.isArray(data.embeddings) || data.embeddings.length !== chunk.length) throw new Error('embedding response shape mismatch');
+      for (const e of data.embeddings) out.push(valid(e?.values));
     }
   }
   return out;
@@ -215,6 +268,6 @@ export function validateSummary(raw: any, statements: string[], model: string): 
 }
 
 export async function summariseCluster(cfg: GeminiConfig, statements: string[]): Promise<ClusterSummary | null> {
-  const raw = await geminiJson(cfg, SUMMARY_SYSTEM, { statements: statements.slice(0, 20) });
+  const raw = await llmJson(cfg, SUMMARY_SYSTEM, { statements: statements.slice(0, 20) });
   return validateSummary(raw, statements, cfg.model);
 }
