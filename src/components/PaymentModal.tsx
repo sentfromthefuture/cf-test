@@ -18,10 +18,11 @@ const btn = 'w-full py-2.5 rounded-lg text-sm font-bold cursor-pointer disabled:
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, selectedTier, authOnly, activePlan = 'Free', onOpenPricing }) => {
   const [session, setSession] = useState<Session | null>(null);
-  const [mode, setMode] = useState<'signin' | 'signup'>('signup');
+  const [mode, setMode] = useState<'signin' | 'signup' | 'reset'>('signup');
   const [email, setEmail] = useState('');
   const [email2, setEmail2] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -50,6 +51,21 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, sel
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) throw error;
     }
+  });
+
+  const sendReset = () => run(async () => {
+    if (!email.trim()) throw new Error('Enter your account email first.');
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
+    if (error) throw error;
+    setErr('Password reset email sent. Follow its link, then return here to set a new password.');
+  });
+
+  const changePassword = () => run(async () => {
+    if (newPassword.length < 8) throw new Error('Use at least 8 characters for your new password.');
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    setNewPassword('');
+    setErr('Password updated successfully.');
   });
 
   const pay = () => run(async () => {
@@ -88,7 +104,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, sel
                 </>
               )}
             </div>
-            {authOnly && <p className="text-[10px] text-slate-500">Billing is processed by Dodo Payments. In-app billing management is not currently available.</p>}
+            {authOnly && <>
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <label className="block text-[10px] uppercase tracking-wider text-slate-500" htmlFor="new-account-password">Change password</label>
+                <input id="new-account-password" className={input} type="password" autoComplete="new-password" placeholder="New password (8+ characters)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                <button onClick={changePassword} disabled={busy || newPassword.length < 8} className={`${btn} bg-slate-800 text-slate-200 hover:bg-slate-700`}>Update password</button>
+              </div>
+              <p className="text-[10px] leading-5 text-slate-500">Billing is processed by Dodo Payments. In-app billing management and cancellation controls are not currently available; contact support through the payment provider receipt for billing assistance.</p>
+            </>}
             {!authOnly && (
               <button onClick={pay} disabled={busy} className={`${btn} bg-cyan-500 text-slate-950 hover:bg-cyan-400 flex items-center justify-center gap-2`}>
                 <Lock size={14} /> {busy ? 'Opening checkout…' : 'Continue to secure checkout'}
@@ -99,16 +122,19 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, sel
         ) : (
           <>
             <p className="text-xs text-slate-400">
-              {mode === 'signup' ? 'Create an account to keep your subscription.' : 'Sign in to your account.'}
+              {mode === 'signup' ? 'Create an account to keep your subscription.' : mode === 'reset' ? 'We will email you a secure password-reset link.' : 'Sign in to your account.'}
             </p>
-            <input className={input} type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            {mode === 'signup' && <input className={input} type="email" placeholder="Re-enter email" value={email2} onChange={(e) => setEmail2(e.target.value)} />}
-            <input className={input} type="password" placeholder="Password (6+ characters)" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button onClick={submitAuth} disabled={busy || !email || !password} className={`${btn} bg-cyan-500 text-slate-950 hover:bg-cyan-400`}>
-              {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}
-            </button>
+            <input className={input} type="email" autoComplete="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            {mode === 'signup' && <input className={input} type="email" autoComplete="email" placeholder="Re-enter email" value={email2} onChange={(e) => setEmail2(e.target.value)} />}
+            {mode !== 'reset' && <input className={input} type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder="Password (6+ characters)" value={password} onChange={(e) => setPassword(e.target.value)} />}
+            {mode === 'reset' ? (
+              <button onClick={sendReset} disabled={busy || !email} className={`${btn} bg-cyan-500 text-slate-950 hover:bg-cyan-400`}>{busy ? 'Sending…' : 'Send reset link'}</button>
+            ) : (
+              <button onClick={submitAuth} disabled={busy || !email || !password} className={`${btn} bg-cyan-500 text-slate-950 hover:bg-cyan-400`}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button>
+            )}
+            {mode === 'signin' && <button onClick={() => { setMode('reset'); setErr(''); }} className="w-full text-center text-xs text-slate-400 underline cursor-pointer">Forgot password?</button>}
             <button onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setErr(''); }} className="w-full text-center text-xs text-slate-400 underline cursor-pointer">
-              {mode === 'signup' ? 'Already have an account? Sign in' : 'New here? Create an account'}
+              {mode === 'signup' ? 'Already have an account? Sign in' : 'Back to sign in / create account'}
             </button>
           </>
         )}
