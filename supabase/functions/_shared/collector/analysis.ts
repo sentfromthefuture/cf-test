@@ -1,4 +1,4 @@
-import { embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, SignalOutput, summariseCluster, worthAnalysing } from './ai.ts';
+import { embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, PendingRecord, SignalOutput, summariseCluster, worthAnalysing } from './ai.ts';
 import { Logger } from './types.ts';
 import { safeError } from './util.ts';
 import { Store } from './store.ts';
@@ -42,7 +42,7 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
   try {
     const llmBatch = 12;
     // Each AI batch can take up to ~35s (call + one retry), so only start one if there is clearly time to finish it.
-    while (d.timeLeftMs() > (d.gemini ? 50_000 : 25_000)) {
+    while (d.timeLeftMs() > (d.gemini ? 45_000 : 25_000)) {
       const pending = await d.store.claimPending(d.gemini ? 36 : 100);
       if (pending.length === 0) break;
       stats.claimed += pending.length;
@@ -56,24 +56,29 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
       if (!d.gemini) {
         signals.push(...todo.map(heuristicAnalyse));
       } else {
-        for (let i = 0; i < todo.length; i += llmBatch) {
-          const chunk = todo.slice(i, i + llmBatch);
-          try {
-            const res = await llmAnalyse(d.gemini, chunk);
-            const failedIds: string[] = [];
-            res.forEach((s, j) => (s ? signals.push(s) : failedIds.push(chunk[j].id)));
-            if (failedIds.length) {
-              await d.store.markFailed(failedIds);
-              stats.failed += failedIds.length;
+        // Up to 3 AI calls in flight at once (calls are also paced by the HTTP client). A systemic error stops the whole run.
+        const chunks: PendingRecord[][] = [];
+        for (let i = 0; i < todo.length; i += llmBatch) chunks.push(todo.slice(i, i + llmBatch));
+        for (let g = 0; g < chunks.length && !llmDown; g += 3) {
+          const group = chunks.slice(g, g + 3);
+          const settled = await Promise.allSettled(group.map((c) => llmAnalyse(d.gemini!, c)));
+          for (let k = 0; k < group.length; k++) {
+            const outcome = settled[k];
+            if (outcome.status === 'fulfilled') {
+              const failedIds: string[] = [];
+              outcome.value.forEach((sig, j) => (sig ? signals.push(sig) : failedIds.push(group[k][j].id)));
+              if (failedIds.length) {
+                await d.store.markFailed(failedIds);
+                stats.failed += failedIds.length;
+              }
+            } else {
+              // Systemic failure (retired model, bad key, quota, outage): leave records pending untouched so nothing is lost
+              // or permanently marked failed; report it and stop hammering the API this run.
+              d.log.warn('llm batch failed', { error: safeError(outcome.reason) });
+              stats.failed += group[k].length;
+              stats.note = `LLM errors: ${safeError(outcome.reason)}`;
+              llmDown = true;
             }
-          } catch (e) {
-            // Systemic failure (retired model, bad key, quota, outage): leave records pending untouched so nothing is lost
-            // or permanently marked failed; report it and stop hammering the API this run.
-            d.log.warn('llm batch failed', { error: safeError(e) });
-            stats.failed += todo.length - i;
-            stats.note = `LLM errors: ${safeError(e)}`;
-            llmDown = true;
-            break;
           }
         }
         // embeddings only for genuine problems
