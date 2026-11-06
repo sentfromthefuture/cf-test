@@ -1,4 +1,4 @@
-import { embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, PendingRecord, SignalOutput, summariseCluster, worthAnalysing } from './ai.ts';
+import { embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, OpenRouterConfig, PendingRecord, SignalOutput, summariseCluster, summariseClusterOpenRouter, worthAnalysing } from './ai.ts';
 import { Logger } from './types.ts';
 import { safeError } from './util.ts';
 import { Store } from './store.ts';
@@ -20,6 +20,8 @@ export interface AnalysisStats {
 export interface AnalysisDeps {
   store: Store;
   gemini: GeminiConfig | null;
+  openrouter?: OpenRouterConfig | null;
+  maxOpenRouterSummaries?: number;
   log: Logger;
   timeLeftMs: () => number;
   clusterThreshold?: number;
@@ -110,12 +112,15 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
       if (n < 200) break;
     }
 
-    if (d.gemini && d.timeLeftMs() > 20_000) {
-      const need = await d.store.clustersNeedingSummary(2);
+    if ((d.openrouter || d.gemini) && d.timeLeftMs() > 20_000) {
+      const need = await d.store.clustersNeedingSummary(d.openrouter ? Math.max(1, Math.min(5, d.maxOpenRouterSummaries ?? 2)) : 2);
       for (const c of need) {
         if (d.timeLeftMs() < 12_000) break;
         try {
-          const summary = await summariseCluster(d.gemini, c.statements);
+          // Prefer OpenRouter for durable opportunity summaries; retain Gemini as a fallback when OpenRouter is not configured.
+          const summary = d.openrouter
+            ? await summariseClusterOpenRouter(d.openrouter, c.statements)
+            : d.gemini ? await summariseCluster(d.gemini, c.statements) : null;
           if (summary) {
             await d.store.saveClusterSummary(c.id, summary);
             stats.summaries++;

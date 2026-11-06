@@ -218,3 +218,75 @@ export async function summariseCluster(cfg: GeminiConfig, statements: string[]):
   const raw = await geminiJson(cfg, SUMMARY_SYSTEM, { statements: statements.slice(0, 20) });
   return validateSummary(raw, statements, cfg.model);
 }
+
+
+// ------------------------------------------------------------------------------------------------ OpenRouter (cluster intelligence only)
+
+/** OpenRouter is initially limited to cluster summaries; Gemini classification and embeddings remain unchanged. */
+export interface OpenRouterConfig {
+  apiKey: string;
+  model: string;
+  http: HttpClient;
+}
+
+export function openRouterConfigFromEnv(env: Record<string, string | undefined>, http: HttpClient): OpenRouterConfig | null {
+  if (env.OPENROUTER_ENABLED !== 'true' || !env.OPENROUTER_API_KEY) return null;
+  return {
+    apiKey: env.OPENROUTER_API_KEY,
+    model: env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+    http,
+  };
+}
+
+export async function summariseClusterOpenRouter(cfg: OpenRouterConfig, statements: string[]): Promise<ClusterSummary | null> {
+  const { data } = await cfg.http.postJson<{
+    choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number };
+  }>(
+    'https://openrouter.ai/api/v1/chat/completions',
+    {
+      model: cfg.model,
+      temperature: 0.1,
+      max_tokens: 900,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SUMMARY_SYSTEM },
+        { role: 'user', content: JSON.stringify({ statements: statements.slice(0, 20) }) },
+      ],
+    },
+    {
+      headers: {
+        authorization: `Bearer ${cfg.apiKey}`,
+        'http-referer': 'https://demandradar.app',
+        'x-title': 'DemandRadar',
+      },
+      minIntervalKey: 'openrouter',
+    },
+  );
+  const message = data?.choices?.[0]?.message?.content;
+  const rawText = typeof message === 'string'
+    ? message
+    : Array.isArray(message) ? message.map((part) => part.text ?? '').join('') : '';
+  if (!rawText) throw new Error('OpenRouter returned no content');
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawText.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+  } catch {
+    throw new Error('OpenRouter returned malformed JSON');
+  }
+  const summary = validateSummary(raw, statements, cfg.model);
+  if (!summary) return null;
+  // Persist provider-reported usage alongside the summary for later cost accounting.
+  return {
+    ...summary,
+    model: cfg.model,
+    usage: {
+      prompt_tokens: Number(data.usage?.prompt_tokens) || 0,
+      completion_tokens: Number(data.usage?.completion_tokens) || 0,
+      total_tokens: Number(data.usage?.total_tokens) || 0,
+      reported_cost_usd: typeof data.usage?.cost === 'number' ? data.usage.cost : null,
+      provider: 'openrouter',
+      generated_at: new Date().toISOString(),
+    },
+  } as ClusterSummary;
+}
