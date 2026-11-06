@@ -317,15 +317,6 @@ export default function App() {
                 <Crown className="h-3.5 w-3.5 text-amber-400" />
                 Pricing Tiers
               </button>
-              <button
-                onClick={() => {
-                  setCheckoutTier('Pro');
-                  setIsPaymentOpen(true);
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-950/50 transition-colors cursor-pointer font-semibold"
-              >
-                <span>PayPal & Binance Gateway</span>
-              </button>
             </div>
           </div>
 
