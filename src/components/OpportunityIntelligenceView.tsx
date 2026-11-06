@@ -274,17 +274,17 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
           <div className="space-y-2.5 text-xs">
             {[
-              { label: 'Problem Frequency', val: opportunity.scores.problemFrequency, color: 'bg-blue-400' },
-              { label: 'Demand Growth', val: opportunity.scores.demandGrowth, color: 'bg-emerald-400' },
-              { label: 'Pain Intensity', val: opportunity.scores.painIntensity, color: 'bg-rose-400' },
-              { label: 'Willingness to Pay', val: opportunity.scores.willingnessToPay, color: 'bg-amber-400' },
-              { label: 'Competition Gap', val: opportunity.scores.competitionGap, color: 'bg-purple-400' },
-              { label: 'Development Feasibility', val: opportunity.scores.developmentFeasibility, color: 'bg-sky-400' },
+              { key: 'problemFrequency' as const, label: 'Problem Frequency', val: opportunity.scores.problemFrequency, color: 'bg-blue-400' },
+              { key: 'demandGrowth' as const, label: 'Demand Growth', val: opportunity.scores.demandGrowth, color: 'bg-emerald-400' },
+              { key: 'painIntensity' as const, label: 'Pain Intensity', val: opportunity.scores.painIntensity, color: 'bg-rose-400' },
+              { key: 'willingnessToPay' as const, label: 'Willingness to Pay', val: opportunity.scores.willingnessToPay, color: 'bg-amber-400' },
+              { key: 'competitionGap' as const, label: 'Competition Gap', val: opportunity.scores.competitionGap, color: 'bg-purple-400' },
+              { key: 'developmentFeasibility' as const, label: 'Development Feasibility', val: opportunity.scores.developmentFeasibility, color: 'bg-sky-400' },
             ].map((m, idx) => (
               <div key={idx} className="space-y-1">
                 <div className="flex justify-between text-[11px] text-slate-400">
                   <span>{m.label}</span>
-                  <span className="font-mono font-bold text-slate-200">{opportunity.live?.basis[(['problemFrequency','demandGrowth','painIntensity','willingnessToPay','competitionGap','developmentFeasibility'][idx] as keyof NonNullable<Opportunity['live']>['basis'])] === 'insufficient_data' ? 'n/a' : `${m.val}%${opportunity.live?.basis[(['problemFrequency','demandGrowth','painIntensity','willingnessToPay','competitionGap','developmentFeasibility'][idx] as keyof NonNullable<Opportunity['live']>['basis'])] === 'ai_estimate' ? '*' : ''}`}</span>
+                  <span className="font-mono font-bold text-slate-200">{opportunity.live?.basis[m.key] === 'insufficient_data' ? 'n/a' : `${m.val}%${opportunity.live?.basis[m.key] === 'ai_estimate' ? '*' : ''}`}</span>
                 </div>
                 <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800/80">
                   <div className={`h-full rounded-full ${m.color}`} style={{ width: `${m.val}%` }}></div>
