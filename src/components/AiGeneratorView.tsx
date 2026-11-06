@@ -75,7 +75,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
 
       const data = await res.json();
       clearInterval(stepInterval);
-      if (res.status === 401 || res.status === 403 || res.status === 429 || res.status === 503) {
+      if (!res.ok) {
         setErrorMsg(data.error || 'Not allowed');
         return;
       }
@@ -130,9 +130,11 @@ ${generatedBrief.pricingTiers?.map((t: any) => `### ${t.tier} (${t.price})\n${t.
 ## Go-To-Market Sprint Plan
 ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).join('\n')}
 `;
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    if (!navigator.clipboard?.writeText) return;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }).catch(() => setCopied(false));
   };
 
   if (activePlan === 'Free' || activePlan === 'Starter') {
@@ -313,6 +315,13 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
           </button>
         </div>
       </form>
+
+      {errorMsg && (
+        <div role="alert" className="rounded-xl border border-rose-900/70 bg-rose-950/30 px-4 py-3 text-xs text-rose-200">
+          <strong className="block mb-1">Brief generation stopped</strong>
+          {errorMsg}
+        </div>
+      )}
 
       {/* Loading Progress State */}
       {loading && (
