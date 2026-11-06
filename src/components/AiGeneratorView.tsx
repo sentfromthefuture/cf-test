@@ -24,10 +24,10 @@ import {
 export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void }> = ({ activePlan, onOpenPricing }) => {
   const [industry, setIndustry] = useState('Retail & Commerce');
   const [country, setCountry] = useState('United States & Global');
-  const [difficulty, setDifficulty] = useState('Medium');
-  const [budget, setBudget] = useState('$1,000 - $3,000');
-  const [technology, setTechnology] = useState('Next.js + Postgres + Stripe');
-  const [businessModel, setBusinessModel] = useState('B2B Tiered SaaS');
+  const [difficulty, setDifficulty] = useState('Medium (2-4 weeks)');
+  const [budget, setBudget] = useState('$1,000 - $3,000 (Lean MVP)');
+  const [technology, setTechnology] = useState('React + Vite + Supabase + Cloudflare Pages');
+  const [businessModel, setBusinessModel] = useState('B2B Tiered SaaS ($49 - $299/mo)');
   const [customTopic, setCustomTopic] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -131,6 +131,14 @@ ${generatedBrief.pricingTiers?.map((t: any) => `### ${t.tier} (${t.price})\n${t.
 
 ## Suggested Validation Plan
 ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).join('\n')}
+
+## Research Basis
+${generatedBrief.researchBasis?.clusters?.map((cluster: any) => `- ${cluster.title}: ${cluster.independentDiscussions} discussions across ${cluster.sourceCount} sources; confidence ${cluster.confidence}`).join('\n') || 'No research clusters attached.'}
+
+## Source Evidence
+${generatedBrief.researchBasis?.evidence?.map((item: any) => `- ${item.source}: ${item.title} — ${item.url} (licence: ${item.license})`).join('\n') || 'No source evidence attached.'}
+
+Commercial estimates and product recommendations are hypotheses requiring independent validation.
 `;
     if (!navigator.clipboard?.writeText) return;
     navigator.clipboard.writeText(text).then(() => {
@@ -253,6 +261,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
               onChange={(e) => setTechnology(e.target.value)}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-white focus:border-cyan-500 focus:outline-none"
             >
+              <option value="React + Vite + Supabase + Cloudflare Pages">React + Vite + Supabase + Cloudflare Pages</option>
               <option value="Next.js + PostgreSQL + Tailwind">Next.js + PostgreSQL + Tailwind</option>
               <option value="React + Node.js + Express + Redis">React + Node.js + Express + Redis</option>
               <option value="Python / FastAPI + Vector DB">Python / FastAPI + Vector DB</option>
@@ -404,6 +413,10 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
                   <span>·</span><span>{cluster.growthRate == null ? 'Growth n/a' : `${cluster.growthRate > 0 ? '+' : ''}${cluster.growthRate}% growth`}</span>
                 </div>
                 <p className="text-[10px] text-slate-500">Sources: {(cluster.sources || []).join(', ') || 'not recorded'}</p>
+                <p className="text-[10px] text-slate-500">WTP evidence signals: {cluster.willingnessToPaySignals ?? 0}</p>
+                {Object.keys(cluster.competitorsNamed || {}).length > 0 && (
+                  <p className="text-[10px] text-slate-500">Alternatives mentioned: {Object.entries(cluster.competitorsNamed).map(([name, count]) => `${name} (${count})`).join(', ')}</p>
+                )}
               </div>
             ))}
           </div>
