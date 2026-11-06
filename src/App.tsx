@@ -240,7 +240,7 @@ export default function App() {
         )}
 
         {currentTab === 'ai-generator' && (
-          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} />
+          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} industries={overview?.industries.map((item) => item.industry) ?? []} />
         )}
       </main>
 
