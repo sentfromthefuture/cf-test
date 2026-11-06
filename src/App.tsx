@@ -256,10 +256,6 @@ export default function App() {
         isOpen={isPricingOpen}
         onClose={() => setIsPricingOpen(false)}
         activePlan={activePlan}
-        onSelectPlan={(plan) => {
-          setIsPricingOpen(false);
-          if (plan !== 'Free') { setCheckoutTier(plan); setIsPaymentOpen(true); }
-        }}
         onOpenCheckout={(tier) => {
           setCheckoutTier(tier);
           setIsPricingOpen(false);
