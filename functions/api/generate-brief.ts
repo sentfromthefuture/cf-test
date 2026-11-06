@@ -123,11 +123,15 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
       return deny('No matching collected research was found for these filters. Try another industry or remove the custom focus after more data has been collected.', 422);
     }
 
-    const q = await fetch(`${SB_URL}/rest/v1/rpc/consume_brief`, { method: 'POST', headers: svc, body: JSON.stringify({ p_user: user.id, p_limit: limit }) });
-    if (!q.ok) return deny('Could not check your usage. Please try again.', 503);
-    if ((await q.json()) !== true) return deny(`Daily limit reached (${limit} briefs per day on ${sub.plan}). It resets at midnight UTC.`, 429);
+    const reservationResponse = await fetch(`${SB_URL}/rest/v1/rpc/reserve_brief`, {
+      method: 'POST', headers: svc,
+      body: JSON.stringify({ p_user: user.id, p_limit: limit }),
+    });
+    if (!reservationResponse.ok) return deny('Could not reserve your brief allowance. Please try again.', 503);
+    const reservationId: string | null = await reservationResponse.json();
+    if (!reservationId) return deny(`Daily limit reached (${limit} briefs per day on ${sub.plan}). It resets at midnight UTC.`, 429);
 
-    if (apiKey) {
+    try {
       const prompt = `You are DemandRadar's Principal Product Architect.
 Synthesize an evidence-grounded product opportunity brief. Proposed product, technical and commercial recommendations are hypotheses, not validated facts:
 - Industry: ${industry || 'SMB Operations'}
@@ -205,14 +209,24 @@ Respond strictly with valid JSON conforming to:
           const parsed = JSON.parse(rawText);
           parsed.researchBasis = researchContext;
           parsed.researchStatus = 'live_collected_research';
+          const commitResponse = await fetch(`${SB_URL}/rest/v1/rpc/commit_brief`, {
+            method: 'POST', headers: svc, body: JSON.stringify({ p_reservation: reservationId }),
+          });
+          if (!commitResponse.ok || (await commitResponse.json()) !== true) {
+            throw new Error('Could not finalize the brief allowance. Please retry.');
+          }
           return new Response(JSON.stringify({ success: true, brief: parsed }), {
             headers: { 'Content-Type': 'application/json' },
           });
         }
       }
+      throw new Error('The AI provider did not return a usable brief.');
+    } catch (generationError: any) {
+      await fetch(`${SB_URL}/rest/v1/rpc/release_brief`, {
+        method: 'POST', headers: svc, body: JSON.stringify({ p_reservation: reservationId }),
+      }).catch(() => undefined);
+      return deny(generationError?.message || 'The AI provider did not return a usable brief. Please retry shortly; no synthetic result was substituted.', 502);
     }
-
-    return deny('The AI provider did not return a usable brief. Please retry shortly; no synthetic result was substituted.', 502);
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message || 'Generation failed' }), {
       status: 500,
