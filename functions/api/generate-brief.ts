@@ -104,10 +104,6 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     const limit = live ? DAILY_LIMITS[sub.plan] : undefined;
     if (!limit) return deny('PRD generation is included in the Pro and Business plans.', 403);
 
-    const q = await fetch(`${SB_URL}/rest/v1/rpc/consume_brief`, { method: 'POST', headers: svc, body: JSON.stringify({ p_user: user.id, p_limit: limit }) });
-    if (!q.ok) return deny('Could not check your usage. Please try again.', 503);
-    if ((await q.json()) !== true) return deny(`Daily limit reached (${limit} briefs per day on ${sub.plan}). It resets at midnight UTC.`, 429);
-
     const body: any = await context.request.json();
     const { industry, country, difficulty, budget, technology, businessModel, customTopic } = body;
     const apiKey = context.env.GEMINI_API_KEY;
@@ -122,6 +118,10 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     if (!researchContext.clusters.length) {
       return deny('No matching collected research was found for these filters. Try another industry or remove the custom focus after more data has been collected.', 422);
     }
+
+    const q = await fetch(`${SB_URL}/rest/v1/rpc/consume_brief`, { method: 'POST', headers: svc, body: JSON.stringify({ p_user: user.id, p_limit: limit }) });
+    if (!q.ok) return deny('Could not check your usage. Please try again.', 503);
+    if ((await q.json()) !== true) return deny(`Daily limit reached (${limit} briefs per day on ${sub.plan}). It resets at midnight UTC.`, 429);
 
     if (apiKey) {
       const prompt = `You are DemandRadar's Principal Product Architect.
