@@ -125,7 +125,7 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
 
     if (apiKey) {
       const prompt = `You are DemandRadar's Principal Product Architect.
-Synthesize a comprehensive, development-ready Software Opportunity Brief / PRD for:
+Synthesize an evidence-grounded product opportunity brief. Proposed product, technical and commercial recommendations are hypotheses, not validated facts:
 - Industry: ${industry || 'SMB Operations'}
 - Region: ${country || 'Global'}
 - Difficulty: ${difficulty || 'Medium'}
@@ -144,8 +144,8 @@ Respond strictly with valid JSON conforming to:
   "productName": "string",
   "tagline": "string",
   "opportunityScore": 88,
-  "marketSizeTAM": "string",
-  "estMonthlyRevenueYear1": "string",
+  "marketSizeTAM": "Not estimated — insufficient market-sizing evidence, or a clearly labelled hypothesis with assumptions",
+  "estMonthlyRevenueYear1": "Not estimated — insufficient evidence, or a scenario explicitly labelled as a hypothesis, not a forecast",
   "problemStatement": "string",
   "targetICP": {
     "role": "string",
@@ -161,17 +161,13 @@ Respond strictly with valid JSON conforming to:
     "competitionGap": 84,
     "developmentFeasibility": 86
   },
-  "competitorMatrix": [
-    { "name": "string", "pricing": "string", "vulnerability": "string", "ourWedge": "string" },
-    { "name": "string", "pricing": "string", "vulnerability": "string", "ourWedge": "string" }
-  ],
+  "competitorMatrix": [],
   "mvpScope": {
     "coreFeatures": ["string", "string", "string"],
     "outOfScope": ["string", "string"]
   },
   "pricingTiers": [
-    { "tier": "Starter", "price": "$29/mo", "features": ["string", "string"] },
-    { "tier": "Pro", "price": "$79/mo", "features": ["string", "string"] }
+    { "tier": "Starter hypothesis", "price": "Hypothesis — validate with buyers", "features": ["string", "string"] }
   ],
   "architectureSpec": {
     "frontend": "string",
