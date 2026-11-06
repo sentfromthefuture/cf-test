@@ -21,7 +21,7 @@ import {
   FileCheck
 } from 'lucide-react';
 
-export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void }> = ({ activePlan, onOpenPricing }) => {
+export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void; industries?: string[] }> = ({ activePlan, onOpenPricing, industries = [] }) => {
   const [industry, setIndustry] = useState('Retail & Commerce');
   const [country, setCountry] = useState('United States & Global');
   const [difficulty, setDifficulty] = useState('Medium (2-4 weeks)');
@@ -35,6 +35,8 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
   const [generatedBrief, setGeneratedBrief] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const industryOptions = Array.from(new Set([...industries, 'Retail & Commerce', 'Real Estate & PropTech', 'Freelance & Agency Ops', 'Hospitality & Food Ops', 'Field Services & Trades', 'Regulatory & AI Governance', 'Healthcare & Wellness', 'Developer Tools & DevOps'])).sort((a, b) => a.localeCompare(b));
 
   const steps = [
     'Reviewing collected public discussions...',
@@ -198,14 +200,7 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
               onChange={(e) => setIndustry(e.target.value)}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-white focus:border-cyan-500 focus:outline-none"
             >
-              <option value="Retail & Commerce">Retail & Multi-Location Commerce</option>
-              <option value="Real Estate & PropTech">Real Estate & Landlord Ops</option>
-              <option value="Freelance & Agency Ops">Freelance & Agency Operations</option>
-              <option value="Hospitality & Food Ops">Hospitality & Food Ops</option>
-              <option value="Field Services & Trades">Field Services, Plumbing & HVAC</option>
-              <option value="Regulatory & AI Governance">Regulatory & AI Governance</option>
-              <option value="Healthcare & Wellness">Dental & Private Healthcare Clinics</option>
-              <option value="Developer Tools & DevOps">Developer Tools & Cloud Infra</option>
+              {industryOptions.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
           </div>
 
