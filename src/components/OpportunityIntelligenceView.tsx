@@ -274,7 +274,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
           <div className="space-y-2.5 text-xs">
             {[
-              { label: 'Problem Frequency (25%)', val: opportunity.scores.problemFrequency, color: 'bg-blue-400' },
+              { label: 'Problem Frequency', val: opportunity.scores.problemFrequency, color: 'bg-blue-400' },
               { label: 'Demand Growth', val: opportunity.scores.demandGrowth, color: 'bg-emerald-400' },
               { label: 'Pain Intensity', val: opportunity.scores.painIntensity, color: 'bg-rose-400' },
               { label: 'Willingness to Pay', val: opportunity.scores.willingnessToPay, color: 'bg-amber-400' },
@@ -284,7 +284,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
               <div key={idx} className="space-y-1">
                 <div className="flex justify-between text-[11px] text-slate-400">
                   <span>{m.label}</span>
-                  <span className="font-mono font-bold text-slate-200">{m.val}%</span>
+                  <span className="font-mono font-bold text-slate-200">{opportunity.live?.basis[(['problemFrequency','demandGrowth','painIntensity','willingnessToPay','competitionGap','developmentFeasibility'][idx] as keyof NonNullable<Opportunity['live']>['basis'])] === 'insufficient_data' ? 'n/a' : `${m.val}%${opportunity.live?.basis[(['problemFrequency','demandGrowth','painIntensity','willingnessToPay','competitionGap','developmentFeasibility'][idx] as keyof NonNullable<Opportunity['live']>['basis'])] === 'ai_estimate' ? '*' : ''}`}</span>
                 </div>
                 <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800/80">
                   <div className={`h-full rounded-full ${m.color}`} style={{ width: `${m.val}%` }}></div>
@@ -405,10 +405,10 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <Swords className="h-5 w-5 text-purple-400" />
-                    Incumbent Vulnerability & Gap Matrix
+                    Alternatives Mentioned in Discussions
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Why users are actively looking for alternatives and where existing incumbents drop the ball.
+                    Names mentioned in source discussions. A mention is not proof of market share, product quality or a competitor weakness.
                   </p>
                 </div>
               </div>
@@ -425,7 +425,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
                     <div>
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-rose-400 block mb-1">
-                        Fatal Incumbent Vulnerability
+                        What the discussion indicates
                       </span>
                       <p className="text-xs text-slate-300 leading-relaxed">
                         {comp.weakness}
@@ -434,10 +434,10 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
                     <div className="pt-2 border-t border-slate-800/80">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-400 block mb-1">
-                        Our Attack Wedge
+                        Potential product angle · hypothesis
                       </span>
                       <p className="text-xs text-slate-400">
-                        Simpler, modern single-focus API ledger with 5-minute setup and zero enterprise bloat.
+                        Validate whether a focused workflow could address this recurring need; this is a product hypothesis, not a measured competitor gap.
                       </p>
                     </div>
                   </div>
