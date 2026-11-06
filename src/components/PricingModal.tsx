@@ -67,7 +67,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Full opportunity rankings', included: true },
         { text: 'Historical demand trend graphs', included: true },
         { text: 'Limited alternatives mention analysis', included: true },
-        { text: 'Development-ready PRD specifications', included: false },
+        { text: 'AI-generated product briefs grounded in collected research', included: false },
         { text: 'Export research (Markdown / JSON)', included: false },
         { text: 'Custom cluster alerts (coming soon)', included: false },
       ],
