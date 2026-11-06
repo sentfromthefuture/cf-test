@@ -340,7 +340,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
                     <span className="font-mono font-bold text-emerald-400">{item.growth}</span>
                   </div>
                   <div className="rounded-lg bg-slate-950 p-2 border border-slate-800/60">
-                    <span className="text-[10px] text-slate-400 block">Target ACV</span>
+                    <span className="text-[10px] text-slate-400 block">ACV hypothesis</span>
                     <span className="font-mono font-bold text-amber-300">{item.estACV}</span>
                   </div>
                 </div>
