@@ -293,7 +293,7 @@ export default function App() {
                 <span className="text-slate-400">Autonomous Market Intelligence Platform</span>
               </div>
               <p className="text-slate-500 max-w-xl">
-                Selling validated business opportunities and human problem intelligence to software builders, indie developers, and venture studios.
+                Evidence-linked problem research for software builders, indie developers, and venture studios.
               </p>
             </div>
 
