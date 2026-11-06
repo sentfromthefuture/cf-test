@@ -15,6 +15,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, activePlan, onOpenPricing, onOpenScoring, onOpenSources, liveSummary, explorerBadge }) => {
   const items = [
+    { id: 'landing', label: 'Home', icon: Radar },
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
     { id: 'explorer', label: 'Explore', icon: Search, badge: explorerBadge },
     { id: 'intelligence', label: 'Dossiers', icon: FileText },
@@ -27,7 +28,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, activ
     <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/95 backdrop-blur-xl">
       <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-3">
-          <button onClick={() => setCurrentTab('dashboard')} aria-label="DemandRadar overview" className="flex shrink-0 items-center gap-3 text-left">
+          <button onClick={() => setCurrentTab('landing')} aria-label="DemandRadar home" className="flex shrink-0 items-center gap-3 text-left">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-900"><Radar className="h-[18px] w-[18px] text-slate-100" /></span>
             <span><span className="block text-[15px] font-semibold tracking-tight text-white">DemandRadar</span><span className="hidden text-[10px] tracking-wide text-slate-500 sm:block">MARKET INTELLIGENCE</span></span>
           </button>

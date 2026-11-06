@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
+import { LandingView } from './components/LandingView';
 import { DashboardView } from './components/DashboardView';
 import { ProblemExplorerView } from './components/ProblemExplorerView';
 import { OpportunityIntelligenceView } from './components/OpportunityIntelligenceView';
@@ -33,7 +34,7 @@ const recompute = (opp: Opportunity, w: ScoringWeights): number => {
 };
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>('landing');
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [opportunities, setOpportunities] = useState<Opportunity[]>(INITIAL_OPPORTUNITIES);
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity>(INITIAL_OPPORTUNITIES[0]);
@@ -61,6 +62,7 @@ export default function App() {
     };
     const sync = async (uid?: string) => {
       setSignedIn(!!uid);
+      if (uid) setCurrentTab((tab) => tab === 'landing' ? 'dashboard' : tab);
       let plan = await load(uid);
       const returning = new URLSearchParams(window.location.search).has('checkout');
       for (let i = 0; uid && returning && plan === 'Free' && i < 10; i++) {
@@ -70,7 +72,7 @@ export default function App() {
       if (alive) setActivePlan(plan);
     };
     supabase.auth.getSession().then(({ data }) => sync(data.session?.user.id));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { sync(s?.user.id); });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => { sync(s?.user.id); if (event === 'PASSWORD_RECOVERY') setIsAuthOpen(true); });
     return () => { alive = false; sub.subscription.unsubscribe(); };
   }, []);
 
@@ -174,6 +176,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
+        {currentTab === 'landing' && <LandingView records={overview?.records_total ?? null} clusters={overview?.clusters_total ?? null} sources={overview?.enabled_sources ?? null} collectionReady={liveStatus === 'ready'} onExplore={() => setCurrentTab('dashboard')} onOpenPricing={() => setIsPricingOpen(true)} onSignIn={() => setIsAuthOpen(true)} />}
         {isDemo && ['dashboard', 'explorer', 'intelligence', 'trends'].includes(currentTab) && (
           <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2 rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 text-xs text-amber-200">
             <FlaskConical className="h-4 w-4 shrink-0" />
@@ -314,15 +317,6 @@ export default function App() {
                 <Crown className="h-3.5 w-3.5 text-amber-400" />
                 Pricing Tiers
               </button>
-              <button
-                onClick={() => {
-                  setCheckoutTier('Pro');
-                  setIsPaymentOpen(true);
-                }}
-                className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/30 px-3 py-1.5 text-xs text-emerald-300 hover:bg-emerald-950/50 transition-colors cursor-pointer font-semibold"
-              >
-                <span>PayPal & Binance Gateway</span>
-              </button>
             </div>
           </div>
 
@@ -330,7 +324,7 @@ export default function App() {
             <div>
               <span className="text-slate-300 font-semibold block mb-1">Developer Economics</span>
               <p>
-                Developers spend months searching for ideas. DemandRadar continuously researches what people struggle with and sells the intelligence. 1,000 subscribers x $29/mo = $29,000 MRR.
+                DemandRadar organises public discussions into research leads. Use the evidence to decide what deserves customer interviews and validation.
               </p>
             </div>
 
@@ -344,9 +338,9 @@ export default function App() {
             </div>
 
             <div>
-              <span className="text-slate-300 font-semibold block mb-1">Phase 5 Vision</span>
+              <span className="text-slate-300 font-semibold block mb-1">Research scope</span>
               <p>
-                Expanding beyond software into physical businesses, manufacturing, logistics, and services to pinpoint where existing markets are failing globally.
+                Current research coverage depends on the sources enabled in the Data Sources workspace. Coverage is shown transparently rather than implied.
               </p>
             </div>
           </div>
