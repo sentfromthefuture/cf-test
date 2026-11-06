@@ -125,11 +125,12 @@ export const adminSetSource = (source: string, enabled?: boolean, intervalMinute
 
 export interface SyncResult {
   sources: Array<{ id: string; status: string; stats: { fetched: number; inserted: number; duplicates: number; errors: number }; error: string | null }>;
-  analysis: { analysed: number; problems: number; method: string } | null;
+  analysis: { analysed: number; problems: number; failed: number; skipped: number; clustered: number; summaries: number; method: string; note?: string } | null;
+  requeued?: number;
 }
 /** Manual sync: the Edge Function re-verifies that the caller is an admin; this button is only a convenience. */
-export async function triggerSync(source?: string): Promise<SyncResult> {
-  const { data, error } = await supabase.functions.invoke('collect', { body: source ? { source } : {} });
+export async function triggerSync(source?: string, action?: 'reanalyse'): Promise<SyncResult> {
+  const { data, error } = await supabase.functions.invoke('collect', { body: { ...(source ? { source } : {}), ...(action ? { action } : {}) } });
   if (error) {
     // Surface the function's own message (e.g. "unauthorized") instead of a generic one.
     let detail = error.message || 'sync failed';

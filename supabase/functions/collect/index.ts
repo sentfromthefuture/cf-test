@@ -55,12 +55,20 @@ Deno.serve(async (req) => {
   else if (await isAdminUser(req, url, env.SUPABASE_ANON_KEY || env.SUPABASE_PUBLISHABLE_KEY || '').catch(() => false)) trigger = 'manual';
   if (!trigger) return json({ error: 'unauthorized' }, 401);
 
-  let body: { source?: unknown; skipAnalysis?: unknown } = {};
+  let body: { source?: unknown; skipAnalysis?: unknown; action?: unknown } = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
   const source = typeof body.source === 'string' && /^[a-z0-9_]{2,40}$/.test(body.source) ? body.source : null;
 
   try {
-    const report = await runCollection({ env, store: new SupabaseStore(url, serviceKey), trigger, source, skipAnalysis: body.skipAnalysis === true, budgetMs: 110_000 });
+    const store = new SupabaseStore(url, serviceKey);
+    if (body.action === 'reanalyse') {
+      // Admin only: re-queue keyword-analysed records so they are re-processed (with AI when a key is configured).
+      if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
+      const requeued = await store.requeueHeuristicAnalysis(5000);
+      const report = await runCollection({ env, store, trigger, analysisOnly: true, budgetMs: 110_000 });
+      return json({ ...report, requeued });
+    }
+    const report = await runCollection({ env, store, trigger, source, skipAnalysis: body.skipAnalysis === true, budgetMs: 110_000 });
     return json(report);
   } catch (e) {
     console.error('collection failed', (e as Error).message);

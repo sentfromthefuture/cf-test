@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Database, RefreshCw, ShieldAlert, ExternalLink, CheckCircle2, XCircle, PauseCircle, Ban, Loader2, AlertTriangle } from 'lucide-react';
+import { Database, RefreshCw, Sparkles, ShieldAlert, ExternalLink, CheckCircle2, XCircle, PauseCircle, Ban, Loader2, AlertTriangle } from 'lucide-react';
 import { adminSetSource, SourceInfo, timeAgo, triggerSync } from '../lib/liveData';
 import type { LiveStatus } from '../App';
 
@@ -45,7 +45,18 @@ export const DataSourcesView: React.FC<Props> = ({ sources, status, isAdmin, sig
     act(`sync:${id ?? 'all'}`, async () => {
       const r = await triggerSync(id);
       const parts = r.sources.map((s) => `${s.id}: ${s.status} (+${s.stats.inserted} new, ${s.stats.duplicates} duplicates${s.error ? `, ${s.error}` : ''})`);
+      if (r.analysis) {
+        const a = r.analysis;
+        parts.push(`analysis (${a.method === 'llm' ? 'AI' : 'keyword fallback'}): ${a.analysed} analysed, ${a.problems} problems, ${a.skipped} skipped, ${a.failed} failed, ${a.clustered} clustered, ${a.summaries} summaries${a.note ? ` — ${a.note}` : ''}`);
+      }
       return parts.length ? parts.join(' · ') : 'No source was due or available to run (locked, disabled, or already running).';
+    });
+
+  const reanalyse = () =>
+    act('reanalyse', async () => {
+      const r = await triggerSync(undefined, 'reanalyse');
+      const a = r.analysis;
+      return `Re-queued ${r.requeued ?? 0} keyword-analysed records. ` + (a ? `This pass: ${a.analysed} analysed (${a.method === 'llm' ? 'AI' : 'keyword fallback'}), ${a.problems} problems, ${a.failed} failed, ${a.clustered} clustered, ${a.summaries} summaries${a.note ? ` — ${a.note}` : ''}. Tap again to continue while records remain pending.` : '');
     });
 
   const implemented = sources.filter((s) => s.availability === 'implemented');
@@ -60,7 +71,7 @@ export const DataSourcesView: React.FC<Props> = ({ sources, status, isAdmin, sig
             Only official public APIs are used. Every figure here comes from the collection database; a source is shown as connected only if it has actually run.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {isAdmin ? (
             <button
               disabled={!!busy}
@@ -68,6 +79,16 @@ export const DataSourcesView: React.FC<Props> = ({ sources, status, isAdmin, sig
               className="flex items-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-2 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${busy === 'sync:all' ? 'animate-spin' : ''}`} /> Sync all due sources
+            </button>
+          ) : null}
+          {isAdmin ? (
+            <button
+              disabled={!!busy}
+              onClick={reanalyse}
+              title="Re-run analysis for records classified by the keyword fallback, using AI if a key is configured"
+              className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-50 cursor-pointer"
+            >
+              {busy === 'reanalyse' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-cyan-300" />} Re-analyse / process queue
             </button>
           ) : (
             <button onClick={signedIn ? undefined : onOpenAuth} className="text-[11px] text-slate-500 border border-slate-800 rounded-lg px-3 py-2 cursor-pointer">

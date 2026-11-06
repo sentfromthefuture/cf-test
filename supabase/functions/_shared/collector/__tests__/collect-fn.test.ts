@@ -44,3 +44,8 @@ test('a signed-in non-admin is refused (admin is re-checked server-side via dr_i
     assert.match(asked, /rpc\/dr_is_admin$/);
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('re-analyse is not available to the scheduler secret', async () => {
+  const res = await call({ method: 'POST', headers: { 'x-collector-secret': 'cron-secret', 'content-type': 'application/json' }, body: '{"action":"reanalyse"}' });
+  assert.equal(res.status, 403);
+});

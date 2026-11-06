@@ -104,4 +104,9 @@ export class MemoryStore implements Store {
   async refreshClusters() { return 1; }
   async clustersNeedingSummary() { return [] as Array<{ id: string; statements: string[] }>; }
   async saveClusterSummary(id: string, s: unknown) { this.summaries.set(id, s); }
+  async requeueHeuristicAnalysis(_limit = 0) {
+    let n = 0;
+    for (const [id, sig] of this.signals) if (sig.analysis_method === 'heuristic') { const r = this.byId(id); if (r) { r.status = 'pending'; r.attempts = 0; this.signals.delete(id); n++; } }
+    return n;
+  }
 }

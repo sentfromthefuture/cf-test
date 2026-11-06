@@ -193,3 +193,28 @@ test('analysis with an LLM key: classification + 768-d embeddings flow to storag
   assert.equal(store2.signals.size, 0);
   assert.equal([...store2.records.values()][0].status, 'pending');
 });
+
+test('analysisOnly processes the queue without claiming or running any source', async () => {
+  const store = new MemoryStore();
+  store.addSource('gh');
+  await store.upsertRecords([rec('gh', '1', { title: 'Wish there was offline mode', excerpt: 'This is frustrating, we would pay for it.' })]);
+  const rep = await runCollection({ env: {}, store, trigger: 'manual', log: silentLog, analysisOnly: true, connectors: {} });
+  assert.deepEqual(rep.claimed, []);
+  assert.equal(rep.analysis!.analysed, 1);
+  assert.equal(store.sources.get('gh')!.locked, false);
+});
+
+test('re-queue sends keyword-analysed records back through (now AI) analysis', async () => {
+  const store = new MemoryStore();
+  await store.upsertRecords([rec('gh', '1', { title: 'Wish there was offline mode', excerpt: 'This is frustrating when travelling.' })]);
+  await runCollection({ env: {}, store, trigger: 'manual', log: silentLog, analysisOnly: true, connectors: {} });
+  assert.equal([...store.signals.values()][0].analysis_method, 'heuristic');
+  assert.equal(await store.requeueHeuristicAnalysis(100), 1);
+  assert.equal(store.signals.size, 0);
+  const emb = Array.from({ length: 768 }, (_, i) => (i === 1 ? 1 : 0));
+  const fetchImpl = (async (url: string) => String(url).includes(':generateContent')
+    ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ results: [{ i: 0, is_problem: true, signal_type: 'feature_request', problem_statement: 'Travellers cannot use the product without a connection', industry: 'Other', severity: 3, competitors: [], language: 'en' }] }) }] } }] }))
+    : new Response(JSON.stringify({ embeddings: [{ values: emb }] }))) as unknown as typeof fetch;
+  await runCollection({ env: { GEMINI_API_KEY: 'k' }, store, trigger: 'manual', log: silentLog, analysisOnly: true, connectors: {}, fetchImpl, sleep: async () => {} });
+  assert.equal([...store.signals.values()][0].analysis_method, 'llm');
+});

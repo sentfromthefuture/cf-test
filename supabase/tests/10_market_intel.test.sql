@@ -195,6 +195,25 @@ begin
   assert (select scores#>>'{components,developmentFeasibility,value}' from public.dr_clusters where id = c)::numeric = 75, 'feasibility 4/5 -> 75';
 end $$;
 
+-- ---------------------------------------------------------------- 6b. re-queue keyword-analysed records (AI key added later)
+do $$
+declare n int; before_clusters int; llm_cluster uuid;
+begin
+  select count(*) into before_clusters from public.dr_clusters;
+  assert (select count(*) from public.dr_problem_signals where analysis_method = 'heuristic') > 0, 'precondition: heuristic signals exist';
+  n := public.dr_requeue_heuristic_analysis(1000);
+  assert n >= 3, format('requeued %s', n);
+  assert (select count(*) from public.dr_problem_signals where analysis_method = 'heuristic' and cluster_id is not null) = 0, 'heuristic signals detached from clusters';
+  assert (select count(*) from public.dr_raw_records r join public.dr_problem_signals s on s.record_id = r.id
+           where s.analysis_method = 'heuristic' and r.analysis_status <> 'pending') = 0, 'heuristic records back in the queue';
+  assert (select count(*) from public.dr_clusters c where not exists (select 1 from public.dr_cluster_members m where m.cluster_id = c.id)) = 0, 'no empty clusters left behind';
+  assert (select count(*) from public.dr_clusters) < before_clusters, 'orphaned heuristic clusters removed';
+  -- AI-analysed clusters are untouched
+  select id into llm_cluster from public.dr_clusters where title like 'Small businesses%';
+  assert llm_cluster is not null and (select members_count from public.dr_clusters where id = llm_cluster) >= 3, 'embedding clusters untouched';
+  
+end $$;
+
 -- ---------------------------------------------------------------- 7. permissions (RLS / grants)
 do $$ begin
   perform set_config('request.jwt.claim.sub', '', true);

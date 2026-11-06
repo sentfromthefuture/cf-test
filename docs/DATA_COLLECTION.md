@@ -76,8 +76,8 @@ Each skipped source has its reason, restriction, official-API status and integra
 
 ## 6. How to activate (Supabase dashboard + GitHub only; no laptop needed where noted)
 
-1. **Migrations** – Supabase dashboard → SQL editor: run `supabase/migrations/20261104000000_market_intel_schema.sql`, then `…000100_market_intel_functions.sql`. (Or `supabase db push`.)
-2. **Function secrets** – Edge Functions → Secrets. Nothing is required for a manual sync: the function automatically receives `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` from Supabase (names starting with `SUPABASE_` are reserved, so do **not** try to set them). Add these only when needed: `COLLECTOR_SECRET` (long random string; required only for the scheduled cron), and optionally `GITHUB_TOKEN` (read-only, public data), `STACKEXCHANGE_KEY`, `GEMINI_API_KEY` (+ `GEMINI_MODEL`, `GEMINI_EMBEDDING_MODEL`), `AUTHOR_HASH_SALT`. Never put these in frontend env vars.
+1. **Migrations** – Supabase dashboard → SQL editor: run, in order, `supabase/migrations/20261104000000_market_intel_schema.sql`, `20261104000100_market_intel_functions.sql`, `20261106000000_reanalyse.sql` (adds the admin “Re-analyse” action). (Or `supabase db push`.)
+2. **Function secrets** – Edge Functions → Secrets. Nothing is required for a manual sync: the function automatically receives `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` from Supabase (names starting with `SUPABASE_` are reserved, so do **not** try to set them). Add these only when needed: `COLLECTOR_SECRET` (long random string; required only for the scheduled cron), and optionally `GITHUB_TOKEN` (read-only, public data), `STACKEXCHANGE_KEY`, `GEMINI_API_KEY` (+ `GEMINI_MODEL`, `GEMINI_EMBEDDING_MODEL`), `CLUSTER_SIMILARITY` (0-1, default 0.80: lower = more aggressive grouping), `AUTHOR_HASH_SALT`. Never put these in frontend env vars.
 3. **Deploy the function** – automatic: `.github/workflows/deploy-collector.yml` deploys `collect` on every push to `main` that touches `supabase/functions/**` (and on demand from the Actions tab). Needs repo secrets `SUPABASE_ACCESS_TOKEN` and `SUPABASE_PROJECT_REF`. Uses Supabase CLI 3.0.0 with `--yes --remote=<ref>`.
 4. **Make yourself admin** – SQL editor: `insert into public.dr_admins (user_id) select id from auth.users where email = '<your email>';`
 5. **Schedule** – edit and run `supabase/cron.sql` in the SQL editor.
@@ -87,7 +87,7 @@ Each skipped source has its reason, restriction, official-API status and integra
 
 1. **Licence/attribution display (compliance)**: the live evidence data already carries `url`, `license`, `attribution`, but `OpportunityIntelligenceView`'s Evidence tab still renders only quote/author/upvotes. Stack Exchange content is CC BY-SA, so author, link and licence **must** be shown next to any excerpt before this is public. Also show per-component score basis labels (data exists in `opportunity.live.basis`) in that view.
 2. Run the live checks for Hacker News and Stack Exchange; fix anything real APIs reveal.
-3. Add a Gemini key, then **calibrate** the cluster threshold on real data and review classification quality. Records analysed by the keyword fallback are not re-analysed when a key is added later (needs a re-queue path).
+3. Add a Gemini key, then **calibrate** the cluster threshold on real data and review classification quality. Records analysed by the keyword fallback are re-processed via the admin **Re-analyse / process queue** button (Data Sources tab).
 4. Browser QA of the new tabs and the demo/live switch on mobile.
 5. Cluster merge pass (two clusters for one problem can arise concurrently, or from keyword vs embedding paths).
 6. Server-side plan enforcement for evidence (currently any signed-in user can read excerpts; the app's plan gating is client-side as before).

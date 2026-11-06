@@ -46,6 +46,7 @@ export interface Store {
   refreshClusters(limit: number): Promise<number>;
   clustersNeedingSummary(limit: number): Promise<Array<{ id: string; statements: string[] }>>;
   saveClusterSummary(id: string, summary: unknown): Promise<void>;
+  requeueHeuristicAnalysis(limit: number): Promise<number>;
 }
 
 /** PostgREST RPC client using the service-role key (server-side only; never shipped to the browser). */
@@ -142,9 +143,12 @@ export class SupabaseStore implements Store {
     return (await this.rpc<number>('dr_refresh_clusters', { p_limit: limit })) ?? 0;
   }
   async clustersNeedingSummary(limit: number) {
-    return (await this.rpc<Array<{ id: string; statements: string[] }>>('dr_clusters_needing_summary', { p_limit: limit, p_min_members: 3 })) ?? [];
+    return (await this.rpc<Array<{ id: string; statements: string[] }>>('dr_clusters_needing_summary', { p_limit: limit, p_min_members: 2 })) ?? [];
   }
   async saveClusterSummary(id: string, summary: unknown) {
     await this.rpc('dr_save_cluster_summary', { p_cluster: id, p_summary: summary });
+  }
+  async requeueHeuristicAnalysis(limit: number) {
+    return (await this.rpc<number>('dr_requeue_heuristic_analysis', { p_limit: limit })) ?? 0;
   }
 }

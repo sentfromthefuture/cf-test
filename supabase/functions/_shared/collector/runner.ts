@@ -16,6 +16,8 @@ export interface RunOptions {
   /** Wall-clock budget for the whole invocation (Edge Functions allow ~150s on the free plan). */
   budgetMs?: number;
   skipAnalysis?: boolean;
+  /** Skip collection entirely and only process the analysis/clustering queue. */
+  analysisOnly?: boolean;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
@@ -48,7 +50,7 @@ export async function runCollection(o: RunOptions): Promise<RunReport> {
   const log = o.log ?? consoleLogger;
   const registry = o.connectors ?? defaultConnectors;
 
-  const claimed = await o.store.claimDueSources({ limit: 3, force: o.source ?? null, trigger: o.trigger, lockSeconds: Math.ceil(budgetMs / 1000) + 120 });
+  const claimed = o.analysisOnly ? [] : await o.store.claimDueSources({ limit: 3, force: o.source ?? null, trigger: o.trigger, lockSeconds: Math.ceil(budgetMs / 1000) + 120 });
 
   // One failing connector must never take the others down: each runs isolated and always reports.
   const settled = await Promise.allSettled(claimed.map((c) => runSource(c, registry[c.id], o, timeLeftMs, now, log)));
@@ -60,7 +62,7 @@ export async function runCollection(o: RunOptions): Promise<RunReport> {
   if (!o.skipAnalysis && timeLeftMs() > 25_000) {
     try {
       const http = createHttpClient({ fetchImpl: o.fetchImpl, sleep: o.sleep, retries: 2, timeoutMs: 40_000 });
-      analysis = await runAnalysis({ store: o.store, gemini: geminiConfigFromEnv(o.env, http), log, timeLeftMs });
+      analysis = await runAnalysis({ store: o.store, gemini: geminiConfigFromEnv(o.env, http), log, timeLeftMs, clusterThreshold: Number(o.env.CLUSTER_SIMILARITY) > 0 ? Number(o.env.CLUSTER_SIMILARITY) : undefined });
     } catch (e) {
       log.error('analysis failed', { error: safeError(e) });
       analysis = { ran: false, method: 'none', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0, note: safeError(e) };
