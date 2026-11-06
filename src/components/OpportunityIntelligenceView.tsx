@@ -85,7 +85,7 @@ ${opportunity.targetPersona}
 ### 2. The Core Problem
 ${opportunity.problemDescription}
 
-### 3. Incumbent Weaknesses (Why existing solutions fail)
+### 3. Existing alternatives and reported gaps
 ${opportunity.existingFails}
 
 ### 4. Software Solution & MVP Features
@@ -101,9 +101,11 @@ ${opportunity.competitors.map(c => `- **${c.name}** (${c.pricing}): Discussion c
 ### 7. Source-linked discussion evidence
 ${opportunity.evidence.length ? opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source} (${e.upvotes} engagement)${e.url ? `\n> Source: ${e.url}` : ''}${e.license ? `\n> Licence: ${e.license}` : ''}`).join('\n\n') : '- No source excerpts are available for this dossier.'}
 `;
-    navigator.clipboard.writeText(text).catch(() => setCopied(false));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    if (!navigator.clipboard?.writeText) { setCopied(false); return; }
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }).catch(() => setCopied(false));
   };
 
   const handleDownloadPRD = () => {
