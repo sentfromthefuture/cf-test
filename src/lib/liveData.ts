@@ -130,7 +130,20 @@ export interface SyncResult {
 /** Manual sync: the Edge Function re-verifies that the caller is an admin; this button is only a convenience. */
 export async function triggerSync(source?: string): Promise<SyncResult> {
   const { data, error } = await supabase.functions.invoke('collect', { body: source ? { source } : {} });
-  if (error) throw new Error(error.message || 'sync failed');
+  if (error) {
+    // Surface the function's own message (e.g. "unauthorized") instead of a generic one.
+    let detail = error.message || 'sync failed';
+    const ctx = (error as { context?: Response }).context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const j = await ctx.json();
+        if (j?.error) detail = `${j.error}${j.detail ? `: ${j.detail}` : ''}`;
+      } catch { /* keep generic message */ }
+    } else if (/failed to send a request/i.test(detail)) {
+      detail = 'Could not reach the collect function (not deployed, blocked by the browser, or offline).';
+    }
+    throw new Error(detail);
+  }
   return data as SyncResult;
 }
 

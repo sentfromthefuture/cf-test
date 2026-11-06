@@ -11,12 +11,14 @@ declare const Deno: { env: { toObject(): Record<string, string> }; serve(h: (req
 
 const env = Deno.env.toObject();
 
-const cors = {
+/** CORS: the browser (supabase-js) sends extra headers such as x-client-info, so we echo back whatever the preflight asks for.
+ *  Safe here because callers authenticate with a bearer token / shared secret header, never cookies. */
+const corsFor = (req: Request): Record<string, string> => ({
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'authorization, apikey, content-type, x-collector-secret',
   'access-control-allow-methods': 'POST, OPTIONS',
-};
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'content-type': 'application/json' } });
+  'access-control-allow-headers': req.headers.get('access-control-request-headers') || 'authorization, x-client-info, apikey, content-type, x-collector-secret',
+  'access-control-max-age': '86400',
+});
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -38,6 +40,8 @@ async function isAdminUser(req: Request, supabaseUrl: string, anonKey: string): 
 }
 
 Deno.serve(async (req) => {
+  const cors = corsFor(req);
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'content-type': 'application/json' } });
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
   if (req.method !== 'POST') return json({ error: 'method not allowed' }, 405);
 
