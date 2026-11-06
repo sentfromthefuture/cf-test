@@ -1,1 +1,50 @@
 @import "tailwindcss";
+
+/* DemandRadar — quiet, evidence-first product system */
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --dr-bg: #0b0c0e;
+  --dr-panel: #111316;
+  --dr-panel-raised: #171a1e;
+  --dr-border: #292d32;
+  --dr-muted: #9299a2;
+  --dr-text: #f1f3f5;
+  --dr-accent: #d7dde4;
+}
+html { background: var(--dr-bg); scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; background: var(--dr-bg); color: var(--dr-text); }
+::selection { background: rgba(220, 228, 236, .2); color: #fff; }
+:focus-visible { outline: 2px solid #aab4bf !important; outline-offset: 2px; }
+button, input, select, textarea { font: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+input, select, textarea { color-scheme: dark; }
+input::placeholder, textarea::placeholder { color: #737b85; }
+table { border-collapse: collapse; }
+th { letter-spacing: .035em; }
+a { color: inherit; }
+* { scrollbar-width: thin; scrollbar-color: #3b4149 transparent; }
+
+/* The application retains its existing Tailwind layout and behavior; these
+   shared surfaces unify the visual language without changing data semantics. */
+header.sticky { background: rgba(11,12,14,.94) !important; border-color: #292d32 !important; box-shadow: 0 1px 0 rgba(255,255,255,.025); }
+main { max-width: 1440px !important; }
+footer { background: #090a0c !important; border-color: #25292e !important; }
+.rounded-2xl.border, .rounded-xl.border { border-color: var(--dr-border); }
+.bg-slate-950 { background-color: #0b0c0e; }
+.bg-slate-900\/80, .bg-slate-900\/90, .bg-slate-900\/60 { background-color: #121519; }
+.border-slate-800, .border-slate-800\/80 { border-color: #292d32; }
+.text-slate-400 { color: #9aa1aa; }
+.text-slate-500 { color: #7c848e; }
+.shadow-lg, .shadow-md { box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+button { transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
+button:active { transform: translateY(1px); }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
