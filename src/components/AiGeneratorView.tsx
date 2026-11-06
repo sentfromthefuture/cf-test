@@ -98,8 +98,10 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
     if (!generatedBrief) return;
     const text = `# Project Brief: ${generatedBrief.productName}
 **Tagline:** ${generatedBrief.tagline}
-**Opportunity Score:** ${generatedBrief.opportunityScore}/100
-**TAM:** ${generatedBrief.marketSizeTAM} | **Est. Year 1 Revenue:** ${generatedBrief.estMonthlyRevenueYear1}
+**AI hypothesis score:** ${generatedBrief.opportunityScore}/100
+**Research status:** ${generatedBrief.researchStatus || 'Not specified'}
+**Market-size hypothesis:** ${generatedBrief.marketSizeTAM}
+**Year-one revenue scenario (not forecast):** ${generatedBrief.estMonthlyRevenueYear1}
 
 ## Problem Statement
 ${generatedBrief.problemStatement}
@@ -110,7 +112,7 @@ ${generatedBrief.problemStatement}
 - **Annual Budget:** ${generatedBrief.targetICP?.annualBudget}
 - **Core Frustration:** ${generatedBrief.targetICP?.coreFrustration}
 
-## 3-Week MVP Feature Specification
+## Suggested MVP Feature Scope (hypothesis)
 ### Core Features:
 ${generatedBrief.mvpScope?.coreFeatures?.map((f: string) => `- ${f}`).join('\n')}
 
@@ -127,7 +129,7 @@ ${generatedBrief.mvpScope?.outOfScope?.map((f: string) => `- ${f}`).join('\n')}
 ## Monetization & Pricing
 ${generatedBrief.pricingTiers?.map((t: any) => `### ${t.tier} (${t.price})\n${t.features?.map((f: string) => `- ${f}`).join('\n')}`).join('\n\n')}
 
-## Go-To-Market Sprint Plan
+## Suggested Validation Plan
 ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).join('\n')}
 `;
     if (!navigator.clipboard?.writeText) return;
