@@ -7,7 +7,7 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: E
   const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
     status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
-  const token = (request.headers.get('Authorization') || '').replace(/^Bearer\\s+/i, '');
+  const token = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
   if (!token) return json({ error: 'Sign in first.' }, 401);
   const auth = await fetch(`${SB_URL}/auth/v1/user`, {
     headers: { apikey: SB_KEY, Authorization: `Bearer ${token}` },
