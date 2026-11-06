@@ -10,6 +10,83 @@ const SB_KEY = 'sb_publishable_B4fokBi_LoR1Pe8o39kTQA_REnB2KbK';
 // Access rules: PRD generation is a Pro/Business feature. Briefs allowed per user per UTC day.
 const DAILY_LIMITS: Record<string, number> = { Pro: 5, Business: 20 };
 
+
+/** Select real, source-linked research from the collector tables. Never synthesize a fake fallback dataset. */
+async function loadResearchContext(svc: Record<string, string>, industry: string, customTopic: string) {
+  const params = new URLSearchParams({
+    select: 'id,title,industry,use_case,unique_discussions,source_count,sources,recent_discussions,prior_discussions,growth_rate,wtp_signals,competitors,scores,confidence,summary,summarized_at',
+    members_count: 'gt.0',
+    order: 'composite_score.desc.nullslast',
+    limit: '100',
+  });
+  const response = await fetch(`${SB_URL}/rest/v1/dr_clusters?${params.toString()}`, { headers: svc });
+  if (!response.ok) throw new Error('Could not load collected research from Supabase.');
+  const rows: any[] = await response.json();
+  const normalize = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const industryTokens = normalize(industry).split(' ').filter((token) => token.length > 2);
+  const topicTokens = normalize(customTopic).split(' ').filter((token) => token.length > 2);
+  const matching = rows.filter((row) => {
+    const rowIndustry = normalize(row.industry);
+    const haystack = normalize([row.title, row.use_case, row.summary?.title, row.summary?.problem_description].join(' '));
+    const industryMatch = !industryTokens.length || industryTokens.some((token) => rowIndustry.includes(token));
+    const topicMatch = !topicTokens.length || topicTokens.some((token) => haystack.includes(token));
+    return industryMatch && topicMatch;
+  }).slice(0, 8);
+  if (!matching.length) return { clusters: [], evidence: [] };
+
+  const ids = matching.map((row) => row.id);
+  const inFilter = `in.(${ids.join(',')})`;
+  const membersParams = new URLSearchParams({
+    select: 'cluster_id,record_id,dr_raw_records(source_id,title,excerpt,url,license,attribution,published_at)',
+    cluster_id: inFilter,
+    limit: '80',
+  });
+  const signalsParams = new URLSearchParams({
+    select: 'cluster_id,record_id,problem_statement,signal_type,wtp_evidence,analysis_method',
+    cluster_id: inFilter,
+    is_problem: 'eq.true',
+    limit: '80',
+  });
+  const [membersResponse, signalsResponse] = await Promise.all([
+    fetch(`${SB_URL}/rest/v1/dr_cluster_members?${membersParams.toString()}`, { headers: svc }),
+    fetch(`${SB_URL}/rest/v1/dr_problem_signals?${signalsParams.toString()}`, { headers: svc }),
+  ]);
+  if (!membersResponse.ok || !signalsResponse.ok) throw new Error('Could not load source evidence for the selected research.');
+  const [members, signals]: [any[], any[]] = await Promise.all([membersResponse.json(), signalsResponse.json()]);
+  const clusterById = new Map(matching.map((row) => [row.id, row]));
+  const signalByRecord = new Map(signals.map((signal) => [signal.record_id, signal]));
+  const evidence = members.map((member) => {
+    const record = member.dr_raw_records ?? {};
+    const signal = signalByRecord.get(member.record_id) ?? {};
+    const cluster = clusterById.get(member.cluster_id);
+    return {
+      clusterTitle: cluster?.title ?? 'Research cluster',
+      source: record.source_id ?? 'unknown',
+      title: record.title ?? '',
+      excerpt: record.excerpt ?? '',
+      url: record.url ?? '',
+      license: record.license ?? 'not stated',
+      attribution: record.attribution ?? '',
+      publishedAt: record.published_at ?? null,
+      problemStatement: signal.problem_statement ?? '',
+      signalType: signal.signal_type ?? 'unknown',
+      willingnessToPayEvidence: signal.wtp_evidence === true,
+      analysisMethod: signal.analysis_method ?? 'unknown',
+    };
+  }).filter((item) => item.url).slice(0, 30);
+  return {
+    clusters: matching.map((row) => ({
+      id: row.id, title: row.title, industry: row.industry, useCase: row.use_case,
+      independentDiscussions: row.unique_discussions, sourceCount: row.source_count, sources: row.sources,
+      recentDiscussions: row.recent_discussions, priorDiscussions: row.prior_discussions,
+      growthRate: row.growth_rate, willingnessToPaySignals: row.wtp_signals,
+      competitorsNamed: row.competitors, scoreComponents: row.scores, confidence: row.confidence,
+      aiSummary: row.summary, summarizedAt: row.summarized_at,
+    })),
+    evidence,
+  };
+}
+
 export const onRequestPost = async (context: { request: Request; env: Env }) => {
   const deny = (error: string, status: number) =>
     new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
@@ -34,6 +111,17 @@ export const onRequestPost = async (context: { request: Request; env: Env }) => 
     const body: any = await context.request.json();
     const { industry, country, difficulty, budget, technology, businessModel, customTopic } = body;
     const apiKey = context.env.GEMINI_API_KEY;
+    if (!apiKey) return deny('AI generation is not configured. Add GEMINI_API_KEY to the Cloudflare Pages environment; no synthetic brief will be returned.', 503);
+
+    let researchContext: { clusters: any[]; evidence: any[] };
+    try {
+      researchContext = await loadResearchContext(svc, String(industry || ''), String(customTopic || ''));
+    } catch (researchError: any) {
+      return deny(researchError?.message || 'Could not load collected research.', 503);
+    }
+    if (!researchContext.clusters.length) {
+      return deny('No matching collected research was found for these filters. Try another industry or remove the custom focus after more data has been collected.', 422);
+    }
 
     if (apiKey) {
       const prompt = `You are DemandRadar's Principal Product Architect.
@@ -110,6 +198,8 @@ Respond strictly with valid JSON conforming to:
         const rawText = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (rawText) {
           const parsed = JSON.parse(rawText);
+          parsed.researchBasis = researchContext;
+          parsed.researchStatus = 'live_collected_research';
           return new Response(JSON.stringify({ success: true, brief: parsed }), {
             headers: { 'Content-Type': 'application/json' },
           });
@@ -117,61 +207,7 @@ Respond strictly with valid JSON conforming to:
       }
     }
 
-    // Fallback if API key not yet set in Cloudflare or direct local execution
-    const fallbackBrief = {
-      productName: `SyncRadar: ${industry || 'Commerce'} Bridge`,
-      tagline: 'Autonomous data reconciliation engine for growing business operators.',
-      opportunityScore: 88,
-      marketSizeTAM: '$4.2B Addressable Market',
-      estMonthlyRevenueYear1: '$15,000 - $38,000 MRR',
-      problemStatement: `Operators in ${industry || 'target niche'} are losing hours every week resolving ghost records and manual errors.`,
-      targetICP: {
-        role: 'Operations Director / Lead Developer',
-        companySize: '5-50 Employees',
-        annualBudget: '$2,400/yr software budget',
-        coreFrustration: 'Fragmented spreadsheets and legacy systems failing to sync in real-time.'
-      },
-      scoreBreakdown: {
-        problemFrequency: 90,
-        demandGrowth: 86,
-        painIntensity: 92,
-        willingnessToPay: 88,
-        competitionGap: 84,
-        developmentFeasibility: 85
-      },
-      competitorMatrix: [
-        { name: 'Incumbent Legacy Suite', pricing: '$400/mo', vulnerability: 'Ancient APIs and long setup delays', ourWedge: '5-minute self-serve onboarding' },
-        { name: 'Generic No-Code Zapier', pricing: '$49/mo', vulnerability: 'No audit logs or financial reconciliation logic', ourWedge: 'Idempotent transactional safety ledger' }
-      ],
-      mvpScope: {
-        coreFeatures: [
-          'Instant webhook ingestion with automated payload deduplication',
-          'Conflict-resolution rules engine',
-          'Real-time discrepancy alerts to Slack and WhatsApp',
-          'Self-service tenant onboarding portal'
-        ],
-        outOfScope: ['Complex on-premise Active Directory sync', 'Custom ERP migrations in v1']
-      },
-      pricingTiers: [
-        { tier: 'Starter', price: '$29/mo', features: ['Up to 5,000 sync events', 'Single workspace', 'Email support'] },
-        { tier: 'Growth', price: '$79/mo', features: ['Up to 50,000 sync events', 'Real-time Slack webhooks', 'Priority queue'] }
-      ],
-      architectureSpec: {
-        frontend: `${technology || 'React + Tailwind'} with optimistic UI updates`,
-        backend: 'Cloudflare Pages Functions / Node.js Express',
-        database: 'PostgreSQL or Cloudflare D1 with transactional guarantees',
-        keyIntegrations: ['Stripe / PayPal Billing', 'SendGrid / Twilio Alerts'],
-        dataModelSummary: 'Tenants, Integrations, EventLogs, Reconciliations, and AlertRules tables.'
-      },
-      gtmStrategy: [
-        { phase: 'Week 1', action: 'Direct outreach to top 50 authors of complaining Reddit/X threads identified by Scout bots' },
-        { phase: 'Week 2', action: 'Publish interactive Cost of Manual Errors calculator to drive inbound traffic' }
-      ]
-    };
-
-    return new Response(JSON.stringify({ success: true, brief: fallbackBrief }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return deny('The AI provider did not return a usable brief. Please retry shortly; no synthetic result was substituted.', 502);
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message || 'Generation failed' }), {
       status: 500,
