@@ -156,7 +156,7 @@ test('analysis lock: a concurrent analysis job is refused', async () => {
   store.locks.add('analysis');
   const rep = await runCollection({ env: {}, store, trigger: 'schedule', log: silentLog });
   assert.equal(rep.analysis!.ran, false);
-  assert.match(rep.analysis!.note!, /another analysis job/);
+  assert.match(rep.analysis!.note!, /another analysis pass/);
 });
 
 test('analysis with an LLM key: classification + 768-d embeddings flow to storage; LLM outage marks records for retry', async () => {

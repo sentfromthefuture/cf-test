@@ -88,7 +88,7 @@ async function geminiJson(cfg: GeminiConfig, system: string, userPayload: unknow
       contents: [{ role: 'user', parts: [{ text: JSON.stringify(userPayload) }] }],
       generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
     },
-    { headers: { 'x-goog-api-key': cfg.apiKey } }, // header, not query string: keeps the key out of URLs and logs
+    { headers: { 'x-goog-api-key': cfg.apiKey }, minIntervalKey: 'gemini' }, // header, not query string: keeps the key out of URLs and logs
   );
   const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
   if (!text) throw new Error('LLM returned no content');
@@ -163,7 +163,7 @@ export async function embedTexts(cfg: GeminiConfig, texts: string[]): Promise<Ar
     const { data } = await cfg.http.postJson<{ embeddings?: Array<{ values?: number[] }> }>(
       `${GEMINI}/models/${cfg.embeddingModel}:batchEmbedContents`,
       { requests: chunk.map((t) => ({ model: `models/${cfg.embeddingModel}`, content: { parts: [{ text: t }] }, taskType: 'CLUSTERING', outputDimensionality: 768 })) },
-      { headers: { 'x-goog-api-key': cfg.apiKey } },
+      { headers: { 'x-goog-api-key': cfg.apiKey }, minIntervalKey: 'gemini' },
     );
     if (!data || !Array.isArray(data.embeddings) || data.embeddings.length !== chunk.length) throw new Error('embedding response shape mismatch');
     for (const e of data.embeddings) {

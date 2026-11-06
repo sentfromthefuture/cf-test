@@ -34,15 +34,16 @@ export interface AnalysisDeps {
  */
 export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
   const stats: AnalysisStats = { ran: false, method: d.gemini ? 'llm' : 'heuristic', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0 };
-  if (!(await d.store.acquireLock('analysis', 300))) {
-    stats.note = 'another analysis job is running';
+  if (!(await d.store.acquireLock('analysis', 180))) {
+    stats.note = 'another analysis pass is still running or was interrupted (its lock frees itself within 3 minutes)';
     return stats;
   }
   stats.ran = true;
   try {
-    const llmBatch = 8;
-    while (d.timeLeftMs() > 25_000) {
-      const pending = await d.store.claimPending(d.gemini ? 24 : 100);
+    const llmBatch = 12;
+    // Each AI batch can take up to ~35s (call + one retry), so only start one if there is clearly time to finish it.
+    while (d.timeLeftMs() > (d.gemini ? 50_000 : 25_000)) {
+      const pending = await d.store.claimPending(d.gemini ? 36 : 100);
       if (pending.length === 0) break;
       stats.claimed += pending.length;
       const skip = pending.filter((r) => !worthAnalysing(r));

@@ -61,7 +61,8 @@ export async function runCollection(o: RunOptions): Promise<RunReport> {
   let analysis: AnalysisStats | null = null;
   if (!o.skipAnalysis && timeLeftMs() > 25_000) {
     try {
-      const http = createHttpClient({ fetchImpl: o.fetchImpl, sleep: o.sleep, retries: 2, timeoutMs: 40_000 });
+      // AI calls: paced (free-tier keys allow only a few requests/minute), bounded so one tap can never outlive the function's time limit.
+      const http = createHttpClient({ fetchImpl: o.fetchImpl, sleep: o.sleep, retries: 1, timeoutMs: 30_000, maxInlineWaitMs: 15_000, minIntervalMs: { gemini: Number(o.env.GEMINI_MIN_INTERVAL_MS) || 3000 } });
       analysis = await runAnalysis({ store: o.store, gemini: geminiConfigFromEnv(o.env, http), log, timeLeftMs, clusterThreshold: Number(o.env.CLUSTER_SIMILARITY) > 0 ? Number(o.env.CLUSTER_SIMILARITY) : undefined });
     } catch (e) {
       log.error('analysis failed', { error: safeError(e) });
