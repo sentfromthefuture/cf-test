@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { LandingView } from './components/LandingView';
+import { AccountView } from './components/AccountView';
 import { DashboardView } from './components/DashboardView';
 import { ProblemExplorerView } from './components/ProblemExplorerView';
 import { OpportunityIntelligenceView } from './components/OpportunityIntelligenceView';
@@ -176,6 +177,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
+        {currentTab === 'account' && <AccountView signedIn={signedIn} activePlan={activePlan} overview={overview} sources={sources} onSignIn={() => setIsAuthOpen(true)} onOpenPricing={() => setIsPricingOpen(true)} onOpenAuth={() => setIsAuthOpen(true)} />}
         {currentTab === 'landing' && <LandingView records={overview?.records_total ?? null} clusters={overview?.clusters_total ?? null} sources={overview?.enabled_sources ?? null} collectionReady={liveStatus === 'ready'} onExplore={() => setCurrentTab('dashboard')} onOpenPricing={() => setIsPricingOpen(true)} onSignIn={() => setIsAuthOpen(true)} />}
         {isDemo && ['dashboard', 'explorer', 'intelligence', 'trends'].includes(currentTab) && (
           <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2 rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 text-xs text-amber-200">
@@ -273,10 +275,10 @@ export default function App() {
       />
       <PaymentModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} selectedTier="Free" authOnly activePlan={activePlan} onOpenPricing={() => { setIsAuthOpen(false); setIsPricingOpen(true); }} />
       <button
-        onClick={() => setIsAuthOpen(true)}
-        className="fixed bottom-4 right-4 z-40 rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer"
+        onClick={() => signedIn ? setCurrentTab('account') : setIsAuthOpen(true)}
+        className="fixed bottom-4 right-4 z-40 rounded-full border border-slate-700 bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-950 shadow-lg hover:bg-white cursor-pointer"
       >
-        {signedIn ? 'Account' : 'Sign in'}
+        {signedIn ? 'Account settings' : 'Sign in'}
       </button>
 
       {/* Footer & Strategic Business Model Insights */}
@@ -291,7 +293,7 @@ export default function App() {
                 <span className="text-slate-400">Autonomous Market Intelligence Platform</span>
               </div>
               <p className="text-slate-500 max-w-xl">
-                Selling validated business opportunities and human problem intelligence to software builders, indie developers, and venture studios.
+                Evidence-linked problem research for software builders, indie developers, and venture studios.
               </p>
             </div>
 

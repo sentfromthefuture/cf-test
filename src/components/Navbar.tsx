@@ -1,5 +1,5 @@
 import React from 'react';
-import { Radar, LayoutDashboard, Search, FileText, TrendingUp, Sparkles, Database, Activity, Sliders, Crown } from 'lucide-react';
+import { Radar, LayoutDashboard, Search, FileText, TrendingUp, Sparkles, Database, Activity, Sliders, Crown, UserRound } from 'lucide-react';
 import { PricingTier } from '../types';
 
 interface NavbarProps {
@@ -16,6 +16,7 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab, activePlan, onOpenPricing, onOpenScoring, onOpenSources, liveSummary, explorerBadge }) => {
   const items = [
     { id: 'landing', label: 'Home', icon: Radar },
+    { id: 'account', label: 'Account', icon: UserRound },
     { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
     { id: 'explorer', label: 'Explore', icon: Search, badge: explorerBadge },
     { id: 'intelligence', label: 'Dossiers', icon: FileText },
