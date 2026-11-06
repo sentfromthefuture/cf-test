@@ -51,6 +51,7 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
       stats.skipped += skip.length;
 
       const signals: SignalOutput[] = [];
+      let llmDown = false;
       if (!d.gemini) {
         signals.push(...todo.map(heuristicAnalyse));
       } else {
@@ -65,11 +66,13 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
               stats.failed += failedIds.length;
             }
           } catch (e) {
+            // Systemic failure (retired model, bad key, quota, outage): leave records pending untouched so nothing is lost
+            // or permanently marked failed; report it and stop hammering the API this run.
             d.log.warn('llm batch failed', { error: safeError(e) });
-            await d.store.markFailed(chunk.map((r) => r.id)); // retried on a later run, permanently failed after 3 attempts
-            stats.failed += chunk.length;
+            stats.failed += todo.length - i;
             stats.note = `LLM errors: ${safeError(e)}`;
-            if (d.timeLeftMs() < 40_000) break;
+            llmDown = true;
+            break;
           }
         }
         // embeddings only for genuine problems
@@ -86,7 +89,8 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
       }
       stats.analysed += await d.store.saveSignals(signals);
       stats.problems += signals.filter((s) => s.is_problem).length;
-      if (stats.failed > 0 && stats.analysed === 0) break; // do not hammer a failing model
+      if (llmDown) break; // do not hammer a failing model
+      if (stats.failed > 0 && stats.analysed === 0) break;
     }
 
     for (let i = 0; i < 20 && d.timeLeftMs() > 15_000; i++) {

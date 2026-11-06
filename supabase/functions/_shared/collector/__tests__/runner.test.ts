@@ -218,3 +218,15 @@ test('re-queue sends keyword-analysed records back through (now AI) analysis', a
   await runCollection({ env: { GEMINI_API_KEY: 'k' }, store, trigger: 'manual', log: silentLog, analysisOnly: true, connectors: {}, fetchImpl, sleep: async () => {} });
   assert.equal([...store.signals.values()][0].analysis_method, 'llm');
 });
+
+test('a retired/unavailable model (HTTP 404) leaves records pending and reports the reason; nothing is marked failed', async () => {
+  const store = new MemoryStore();
+  await store.upsertRecords([rec('gh', '1', { title: 'Wish there was offline mode', excerpt: 'This is frustrating when travelling.' })]);
+  const fetchImpl = (async () => new Response('{"error":{"code":404,"message":"models/old-model is no longer available"}}', { status: 404 })) as unknown as typeof fetch;
+  const rep = await runCollection({ env: { GEMINI_API_KEY: 'k' }, store, trigger: 'manual', log: silentLog, analysisOnly: true, connectors: {}, fetchImpl, sleep: async () => {} });
+  assert.match(rep.analysis!.note!, /404.*no longer available/);
+  assert.equal(rep.analysis!.analysed, 0);
+  const r = [...store.records.values()][0];
+  assert.equal(r.status, 'pending');
+  assert.equal(r.attempts, 0, 'systemic errors do not burn per-record attempts');
+});

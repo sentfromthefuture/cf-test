@@ -112,7 +112,7 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
           const retryAfter = parseRetryAfter(res.headers, now());
           const limited = res.status === 429 || (res.status === 403 && retryAfter !== null) || (res.status === 403 && /rate limit|abuse/i.test(snippet));
           if (limited) usage.rateLimited++;
-          failure = new HttpError(`HTTP ${res.status}`, res.status, retryAfter, snippet);
+          failure = new HttpError(`HTTP ${res.status}${snippet ? `: ${snippet.slice(0, 160)}` : ''}`, res.status, retryAfter, snippet);
           const retryable = limited || res.status >= 500 || res.status === 408;
           if (!retryable) {
             usage.errors++;

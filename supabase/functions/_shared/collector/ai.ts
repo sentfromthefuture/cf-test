@@ -75,7 +75,7 @@ export interface GeminiConfig {
 
 export function geminiConfigFromEnv(env: Record<string, string | undefined>, http: HttpClient): GeminiConfig | null {
   if (!env.GEMINI_API_KEY) return null;
-  return { apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-2.5-flash', embeddingModel: env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001', http };
+  return { apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL || 'gemini-3.5-flash', embeddingModel: env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001', http };
 }
 
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
