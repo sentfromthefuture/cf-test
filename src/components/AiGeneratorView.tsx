@@ -153,7 +153,7 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
     return (
       <div className="rounded-2xl border border-amber-500/30 bg-slate-900/60 p-8 text-center space-y-3">
         <h2 className="text-base font-bold text-white">AI opportunity briefs</h2>
-        <p className="text-xs text-slate-400">Generating development-ready briefs is included in the Pro and Business plans.</p>
+        <p className="text-xs text-slate-400">Evidence-grounded product briefs are included in the Pro and Business plans.</p>
         <button onClick={onOpenPricing} className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 cursor-pointer">View plans</button>
       </div>
     );
@@ -174,7 +174,7 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Filter market demand and synthesize development-ready project briefs (PRD, MVP spec, architecture, pricing).
+            Turn collected problem clusters into a product brief, validation plan and technical hypotheses.
           </p>
         </div>
       </div>
@@ -187,7 +187,7 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
             Market Filters & Parameters
           </span>
           <span className="text-xs text-slate-400 hidden sm:inline">
-            Synthesizes real-time complaint data into actionable PRDs
+            Uses collected discussions and source-linked evidence
           </span>
         </div>
 
@@ -310,12 +310,12 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
             {loading ? (
               <>
                 <Sparkles className="h-4 w-4 animate-spin" />
-                Synthesizing Opportunity PRD...
+                Preparing research-grounded brief...
               </>
             ) : (
               <>
                 <Sparkles className="h-4 w-4" />
-                Generate Development PRD
+                Generate research-grounded brief
               </>
             )}
           </button>
