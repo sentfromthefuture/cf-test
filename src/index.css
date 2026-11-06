@@ -48,3 +48,19 @@ button:active { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Neutralize the old neon palette in product chrome; retain semantic status colors. */
+.text-cyan-300, .text-cyan-400, .text-cyan-500 { color: #d1d7de !important; }
+.border-cyan-500, .border-cyan-800, .border-cyan-900, .border-cyan-800\/60 { border-color: #59616b !important; }
+.bg-cyan-600 { background-color: #d8dde3 !important; color: #101215 !important; }
+.hover\\:bg-cyan-500:hover { background-color: #eef1f4 !important; color: #101215 !important; }
+.bg-cyan-950, .bg-cyan-950\/80, .bg-cyan-950\/70 { background-color: #20252b !important; }
+.shadow-cyan-600\/20, .shadow-cyan-500\/20 { box-shadow: none !important; }
+.rounded-2xl { border-radius: 14px; }
+.rounded-xl { border-radius: 11px; }
+main > div > .mb-4 { border-radius: 10px; }
+@media (max-width: 640px) {
+  main { padding-left: 14px !important; padding-right: 14px !important; padding-top: 18px !important; }
+  footer { padding-top: 28px !important; padding-bottom: 28px !important; }
+  table { min-width: 640px; }
+}
