@@ -138,7 +138,7 @@ ${generatedBrief.researchBasis?.clusters?.map((cluster: any) => `- ${cluster.tit
 ## Source Evidence
 ${generatedBrief.researchBasis?.evidence?.map((item: any) => `- ${item.source}: ${item.title} — ${item.url} (licence: ${item.license})`).join('\n') || 'No source evidence attached.'}
 
-Commercial estimates and product recommendations are hypotheses requiring independent validation.
+Commercial estimates, proposed pricing and product recommendations are hypotheses requiring independent validation.
 `;
     if (!navigator.clipboard?.writeText) return;
     navigator.clipboard.writeText(text).then(() => {
