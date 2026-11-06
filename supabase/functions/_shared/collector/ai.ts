@@ -270,7 +270,7 @@ export async function summariseClusterOpenRouter(cfg: OpenRouterConfig, statemen
   if (!rawText) throw new Error('OpenRouter returned no content');
   let raw: unknown;
   try {
-    raw = JSON.parse(rawText.replace(/^```(?:json)?\\s*|\\s*```$/g, ''));
+    raw = JSON.parse(rawText.replace(/^```(?:json)?\s*|\s*```$/g, ''));
   } catch {
     throw new Error('OpenRouter returned malformed JSON');
   }
