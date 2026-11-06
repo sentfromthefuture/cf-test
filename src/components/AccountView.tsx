@@ -22,21 +22,30 @@ export const AccountView: React.FC<AccountViewProps> = ({ signedIn, activePlan, 
   const [periodEnd, setPeriodEnd] = useState<string | null>(null);
   const [loading, setLoading] = useState(signedIn);
   const [error, setError] = useState('');
+  const [usage, setUsage] = useState<{ used: number; limit: number; remaining: number; resetAt: string } | null>(null);
+  const [hasBillingCustomer, setHasBillingCustomer] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const load = async () => {
       if (!signedIn) { setLoading(false); return; }
       setLoading(true); setError('');
-      const { data: auth } = await supabase.auth.getUser();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) { setLoading(false); return; }
+      const response = await fetch('/api/account', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
       if (!alive) return;
-      setEmail(auth.user?.email ?? '');
-      if (!auth.user) { setLoading(false); return; }
-      const { data, error: subError } = await supabase.from('subscriptions').select('status,current_period_end').eq('user_id', auth.user.id).maybeSingle();
-      if (!alive) return;
-      if (subError) setError('Subscription details could not be loaded. Your access level is still verified separately.');
-      else if (data) { setStatus(data.status ?? 'unknown'); setPeriodEnd(data.current_period_end ?? null); }
-      else { setStatus('Free plan'); setPeriodEnd(null); }
+      if (!response.ok) {
+        setError('Account and usage details could not be loaded. Please refresh and try again.');
+      } else {
+        const account: any = await response.json();
+        setEmail(account.email ?? '');
+        setStatus(account.status ?? 'unknown');
+        setPeriodEnd(account.periodEnd ?? null);
+        setUsage(account.usage ?? null);
+        setHasBillingCustomer(!!account.hasBillingCustomer);
+      }
       setLoading(false);
     };
     load();
@@ -44,6 +53,18 @@ export const AccountView: React.FC<AccountViewProps> = ({ signedIn, activePlan, 
   }, [signedIn]);
 
   const dailyBriefLimit = activePlan === 'Business' ? 20 : activePlan === 'Pro' ? 5 : 0;
+  const openBillingPortal = async () => {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) { setError('Please sign in again to manage billing.'); return; }
+    setPortalLoading(true); setError('');
+    try {
+      const response = await fetch('/api/customer-portal', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      const result: any = await response.json();
+      if (!response.ok || !result.url) throw new Error(result.error || 'Billing portal is unavailable.');
+      window.location.assign(result.url);
+    } catch (err: any) { setError(err.message || 'Could not open billing portal.'); setPortalLoading(false); }
+  };
   const implemented = sources.filter((s) => s.availability === 'implemented').length;
   const enabled = sources.filter((s) => s.enabled).length;
 
@@ -73,15 +94,18 @@ export const AccountView: React.FC<AccountViewProps> = ({ signedIn, activePlan, 
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400"><CreditCard size={15}/> Subscription</div>
         <div className="mt-4 flex items-center justify-between gap-3"><div><div className="text-2xl font-semibold text-white">{activePlan}</div><div className="mt-1 text-xs text-slate-500">{loading ? 'Checking subscription…' : status}</div></div><span className="rounded-full border border-slate-700 px-2.5 py-1 text-[10px] text-slate-300">{activePlan === 'Free' ? 'Free access' : 'Plan active'}</span></div>
         <div className="mt-4 flex items-start gap-2 border-t border-slate-800 pt-3 text-xs text-slate-400"><CalendarClock size={14} className="mt-0.5 shrink-0"/><span>Current period ends: {dateLabel(periodEnd)}</span></div>
-        <button onClick={onOpenPricing} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-900">Compare plans <ArrowUpRight size={13}/></button>
-        <p className="mt-3 text-[10px] leading-5 text-slate-500">Billing portal and self-service cancellation are not connected yet. Do not treat this page as a cancellation control.</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={onOpenPricing} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-900">Compare plans <ArrowUpRight size={13}/></button>
+          {hasBillingCustomer && <button onClick={openBillingPortal} disabled={portalLoading} className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-900 disabled:opacity-50">{portalLoading ? 'Opening billing…' : 'Manage billing'} <ArrowUpRight size={13}/></button>}
+        </div>
+        {!hasBillingCustomer && activePlan !== 'Free' && <p className="mt-3 text-[10px] leading-5 text-slate-500">Billing management will appear once the payment provider's customer record is linked.</p>}
       </section>
     </div>
 
     <section className="rounded-2xl border border-slate-800 bg-[#111418] p-5">
       <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400"><Activity size={15}/> Plan capabilities</div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><div className="text-xs text-slate-400">AI opportunity briefs</div><div className="mt-1 text-lg font-semibold text-white">{dailyBriefLimit ? `Up to ${dailyBriefLimit} per UTC day` : 'Not included'}</div><p className="mt-1 text-[11px] leading-5 text-slate-500">Daily allowance for your current plan. A live remaining-use counter is not exposed by the current API.</p></div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><div className="text-xs text-slate-400">AI opportunity briefs</div><div className="mt-1 text-lg font-semibold text-white">{dailyBriefLimit ? `${usage?.remaining ?? '—'} of ${usage?.limit ?? dailyBriefLimit} remaining today` : 'Not included'}</div><p className="mt-1 text-[11px] leading-5 text-slate-500">{usage ? `${usage.used} used · resets at ${new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' }).format(new Date(usage.resetAt))}` : 'Daily allowance is verified by the server.'}</p></div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"><div className="text-xs text-slate-400">Research workspace</div><div className="mt-1 text-lg font-semibold text-white">{activePlan === 'Free' ? 'Top 3 dossiers' : 'Expanded access'}</div><p className="mt-1 text-[11px] leading-5 text-slate-500">Access is enforced by the application, not by a browser-selected plan value.</p></div>
       </div>
     </section>
