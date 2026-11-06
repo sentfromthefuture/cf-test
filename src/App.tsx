@@ -35,7 +35,7 @@ const recompute = (opp: Opportunity, w: ScoringWeights): number => {
 };
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<string>('landing');
+  const [currentTab, setCurrentTab] = useState<string>(() => new URLSearchParams(window.location.search).get('tab') === 'account' ? 'account' : 'landing');
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [opportunities, setOpportunities] = useState<Opportunity[]>(INITIAL_OPPORTUNITIES);
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity>(INITIAL_OPPORTUNITIES[0]);
@@ -52,28 +52,33 @@ export default function App() {
   const [signedIn, setSignedIn] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
 
-  // The plan comes from the server (Supabase), never from the browser.
+  // Subscription and usage are read through the authenticated server endpoint.
+  // RLS is enabled on billing tables without client policies, so never query them directly here.
   useEffect(() => {
     let alive = true;
-    const load = async (uid?: string): Promise<PricingTier> => {
-      if (!uid) return 'Free';
-      const { data } = await supabase.from('subscriptions').select('plan,status,current_period_end').eq('user_id', uid).maybeSingle();
-      const live = data && (data.status === 'active' || (data.status === 'cancelled' && data.current_period_end && new Date(data.current_period_end) > new Date()));
-      return (live ? data.plan : 'Free') as PricingTier;
+    const load = async (accessToken?: string): Promise<PricingTier> => {
+      if (!accessToken) return 'Free';
+      const response = await fetch('/api/account', { headers: { Authorization: `Bearer ${accessToken}` }, cache: 'no-store' });
+      if (!response.ok) return 'Free';
+      const account: any = await response.json();
+      return (['Starter', 'Pro', 'Business'].includes(account.plan) ? account.plan : 'Free') as PricingTier;
     };
-    const sync = async (uid?: string) => {
+    const sync = async (uid?: string, accessToken?: string) => {
       setSignedIn(!!uid);
       if (uid) setCurrentTab((tab) => tab === 'landing' ? 'dashboard' : tab);
-      let plan = await load(uid);
+      let plan = await load(accessToken);
       const returning = new URLSearchParams(window.location.search).has('checkout');
-      for (let i = 0; uid && returning && plan === 'Free' && i < 10; i++) {
+      for (let i = 0; uid && accessToken && returning && plan === 'Free' && i < 10; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        plan = await load(uid);
+        plan = await load(accessToken);
       }
       if (alive) setActivePlan(plan);
     };
-    supabase.auth.getSession().then(({ data }) => sync(data.session?.user.id));
-    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => { sync(s?.user.id); if (event === 'PASSWORD_RECOVERY') setIsAuthOpen(true); });
+    supabase.auth.getSession().then(({ data }) => sync(data.session?.user.id, data.session?.access_token));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      sync(s?.user.id, s?.access_token);
+      if (event === 'PASSWORD_RECOVERY') setIsAuthOpen(true);
+    });
     return () => { alive = false; sub.subscription.unsubscribe(); };
   }, []);
 
