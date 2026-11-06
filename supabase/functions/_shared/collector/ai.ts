@@ -230,7 +230,7 @@ export interface OpenRouterConfig {
 }
 
 export function openRouterConfigFromEnv(env: Record<string, string | undefined>, http: HttpClient): OpenRouterConfig | null {
-  if (!env.OPENROUTER_API_KEY) return null;
+  if (env.OPENROUTER_ENABLED !== 'true' || !env.OPENROUTER_API_KEY) return null;
   return {
     apiKey: env.OPENROUTER_API_KEY,
     model: env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
