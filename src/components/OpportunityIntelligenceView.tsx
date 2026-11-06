@@ -402,7 +402,7 @@ ${opportunity.evidence.length ? opportunity.evidence.map(e => `> "${e.quote}"\n>
 
           <div className={`space-y-4 ${activePlan === 'Free' ? 'blur-xs select-none pointer-events-none' : ''}`}>
             {activePlan === 'Starter' && (
-              <p className="text-[11px] text-amber-300">Starter shows a limited competitor view. Upgrade to Pro for the full vulnerability matrix.</p>
+              <p className="text-[11px] text-amber-300">Starter shows a limited competitor view. Upgrade to Pro for the full alternatives analysis.</p>
             )}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
               <div className="flex items-center justify-between">
