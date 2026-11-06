@@ -142,11 +142,11 @@ grant execute on function public.commit_brief(uuid) to service_role;
 grant execute on function public.release_brief(uuid) to service_role;
 
 -- Retire direct invocation of the older arbitrary-user quota increment RPC when present.
-do $
+do $block$
 begin
   if to_regprocedure('public.consume_brief(uuid,integer)') is not null then
     execute 'revoke all on function public.consume_brief(uuid, integer) from public, anon, authenticated';
     execute 'grant execute on function public.consume_brief(uuid, integer) to service_role';
   end if;
 end;
-$;
+$block$;
