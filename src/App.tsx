@@ -72,7 +72,7 @@ export default function App() {
       if (alive) setActivePlan(plan);
     };
     supabase.auth.getSession().then(({ data }) => sync(data.session?.user.id));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { sync(s?.user.id); });
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => { sync(s?.user.id); if (event === 'PASSWORD_RECOVERY') setIsAuthOpen(true); });
     return () => { alive = false; sub.subscription.unsubscribe(); };
   }, []);
 
