@@ -17,6 +17,7 @@ async function loadResearchContext(svc: Record<string, string>, industry: string
   const params = new URLSearchParams({
     select: 'id,title,industry,use_case,unique_discussions,source_count,sources,recent_discussions,prior_discussions,growth_rate,wtp_signals,competitors,scores,confidence,summary,summarized_at',
     members_count: 'gt.0',
+    unique_discussions: 'gte.2',
     order: 'composite_score.desc.nullslast',
     limit: '100',
   });
@@ -54,8 +55,10 @@ async function loadResearchContext(svc: Record<string, string>, industry: string
   ]);
   if (!membersResponse.ok || !signalsResponse.ok) throw new Error('Could not load source evidence for the selected research.');
   const [members, signals]: [any[], any[]] = await Promise.all([membersResponse.json(), signalsResponse.json()]);
-  const clusterById = new Map(matching.map((row) => [row.id, row]));
-  const signalByRecord = new Map(signals.map((signal) => [signal.record_id, signal]));
+  const clusterById = new Map<string, any>();
+  matching.forEach((row) => clusterById.set(row.id, row));
+  const signalByRecord = new Map<string, any>();
+  signals.forEach((signal) => signalByRecord.set(signal.record_id, signal));
   const evidence = members.map((member) => {
     const record = member.dr_raw_records ?? {};
     const signal = signalByRecord.get(member.record_id) ?? {};
