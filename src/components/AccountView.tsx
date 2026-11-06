@@ -31,7 +31,8 @@ export const AccountView: React.FC<AccountViewProps> = ({ signedIn, activePlan, 
       const { data: auth } = await supabase.auth.getUser();
       if (!alive) return;
       setEmail(auth.user?.email ?? '');
-      const { data, error: subError } = await supabase.from('subscriptions').select('status,current_period_end').maybeSingle();
+      if (!auth.user) { setLoading(false); return; }
+      const { data, error: subError } = await supabase.from('subscriptions').select('status,current_period_end').eq('user_id', auth.user.id).maybeSingle();
       if (!alive) return;
       if (subError) setError('Subscription details could not be loaded. Your access level is still verified separately.');
       else if (data) { setStatus(data.status ?? 'unknown'); setPeriodEnd(data.current_period_end ?? null); }
