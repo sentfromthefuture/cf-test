@@ -54,7 +54,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenScoring,
   activePlan,
 }) => {
-  const topOpportunity = opportunities[0];
+  const topOpportunity = [...opportunities].sort((a, b) => b.scores.compositeScore - a.scores.compositeScore)[0] ?? opportunities[0];
   const fastGrowing = [...opportunities].sort((a, b) => b.growthRate - a.growthRate).slice(0, 4);
   const ov = liveStatus === 'ready' ? overview : null;
   const topInd = ov?.industries.find((i) => i.industry !== 'Other') ?? null; // 'Other' is the unclassified bucket, not an industry
@@ -71,7 +71,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="max-w-3xl space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] font-medium tracking-wide text-slate-300">
               <span className="flex h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-              AUTONOMOUS MARKET INTELLIGENCE RADAR
+              PUBLIC-DISCUSSION MARKET RESEARCH
             </div>
             <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight text-white">
               Discover what the world needs <br className="hidden sm:inline" />
@@ -120,12 +120,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* Metric 2 */}
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 relative overflow-hidden group hover:border-slate-600 transition-all">
           <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-            <span>Validated Clusters</span>
+            <span>Problem Clusters</span>
             <Sparkles className="h-3.5 w-3.5 text-blue-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-white">{isDemo ? dash : opportunities.length.toLocaleString()}</div>
+          <div className="text-xl sm:text-2xl font-black font-mono text-white">{n(ov?.clusters_total)}</div>
           <div className="text-[10px] text-blue-400 mt-1">
-            2+ independent discussions
+            Grouped discussion patterns
           </div>
         </div>
 
@@ -267,7 +267,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <Flame className="h-4 w-4 text-rose-400" />
-              Highest Rated Opportunity Today
+              Top-scoring opportunity
             </h2>
             <span className="rounded bg-rose-950/80 px-2 py-0.5 text-xs font-mono font-bold text-rose-300 border border-rose-800">
               Score: {topOpportunity.scores.compositeScore}/100
@@ -287,11 +287,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
               <div className="flex items-center gap-2 shrink-0">
                 <div className="text-right">
-                  <div className="text-[10px] text-slate-400 uppercase">Discussion Growth</div>
+                  <div className="text-[10px] text-slate-400 uppercase">30-day discussion growth</div>
                   <div className="text-sm font-mono font-bold text-emerald-400">{topOpportunity.growth}</div>
                 </div>
                 <div className="text-right border-l border-slate-800 pl-2">
-                  <div className="text-[10px] text-slate-400 uppercase">Target ACV</div>
+                  <div className="text-[10px] text-slate-400 uppercase">ACV hypothesis</div>
                   <div className="text-sm font-mono font-bold text-amber-300">{topOpportunity.estACV}</div>
                 </div>
               </div>
@@ -313,7 +313,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* 6-Factor Score breakdown mini-pills */}
             <div>
               <div className="text-[11px] font-semibold text-slate-400 mb-2 uppercase tracking-wider">
-                Opportunity Score Breakdown (6-Factor Algorithm){topOpportunity.live ? ' · * = AI estimate · n/a = insufficient data' : ' · demo values'}
+                Opportunity score components (6 factors){topOpportunity.live ? ' · * = AI estimate · n/a = insufficient data' : ' · demo values'}
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center text-xs">
                 <div className="rounded-lg bg-slate-950 p-2 border border-slate-800">
@@ -365,7 +365,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-emerald-400" />
-                Fast-Growing Problem Clusters (last 30 days vs prior 30)
+                Fast-growing problem clusters · recent 30 days vs prior 30
               </h3>
               <button
                 onClick={() => onNavigateTab('explorer')}

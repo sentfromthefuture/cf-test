@@ -240,7 +240,7 @@ export default function App() {
         )}
 
         {currentTab === 'ai-generator' && (
-          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} />
+          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} industries={overview?.industries.map((item) => item.industry) ?? []} />
         )}
       </main>
 
@@ -256,10 +256,6 @@ export default function App() {
         isOpen={isPricingOpen}
         onClose={() => setIsPricingOpen(false)}
         activePlan={activePlan}
-        onSelectPlan={(plan) => {
-          setIsPricingOpen(false);
-          if (plan !== 'Free') { setCheckoutTier(plan); setIsPaymentOpen(true); }
-        }}
         onOpenCheckout={(tier) => {
           setCheckoutTier(tier);
           setIsPricingOpen(false);
@@ -272,7 +268,7 @@ export default function App() {
         onClose={() => setIsPaymentOpen(false)}
         selectedTier={checkoutTier}
       />
-      <PaymentModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} selectedTier="Free" authOnly />
+      <PaymentModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} selectedTier="Free" authOnly activePlan={activePlan} onOpenPricing={() => { setIsAuthOpen(false); setIsPricingOpen(true); }} />
       <button
         onClick={() => setIsAuthOpen(true)}
         className="fixed bottom-4 right-4 z-40 rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 cursor-pointer"

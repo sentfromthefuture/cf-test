@@ -17,7 +17,6 @@ interface PricingModalProps {
   isOpen: boolean;
   onClose: () => void;
   activePlan: PricingTier;
-  onSelectPlan: (plan: PricingTier) => void;
   onOpenCheckout: (tier: PricingTier) => void;
 }
 
@@ -25,7 +24,6 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   isOpen,
   onClose,
   activePlan,
-  onSelectPlan,
   onOpenCheckout,
 }) => {
   const [simSubscribers, setSimSubscribers] = useState<number>(1000);
@@ -52,8 +50,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Basic problem descriptions', included: true },
         { text: 'Top 3 opportunity rankings', included: true },
         { text: 'Historical demand trend graphs', included: false },
-        { text: 'Full competitor vulnerability matrix', included: false },
-        { text: 'Development-ready PRD specifications', included: false },
+        { text: 'Alternatives mentioned in source discussions', included: false },
+        { text: 'AI-generated product briefs grounded in collected research', included: false },
         { text: 'Export research (Markdown / JSON)', included: false },
         { text: 'Custom cluster alerts (coming soon)', included: false },
       ],
@@ -68,8 +66,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Basic problem descriptions', included: true },
         { text: 'Full opportunity rankings', included: true },
         { text: 'Historical demand trend graphs', included: true },
-        { text: 'Limited competitor analysis', included: true },
-        { text: 'Development-ready PRD specifications', included: false },
+        { text: 'Limited alternatives mention analysis', included: true },
+        { text: 'AI-generated product briefs grounded in collected research', included: false },
         { text: 'Export research (Markdown / JSON)', included: false },
         { text: 'Custom cluster alerts (coming soon)', included: false },
       ],
@@ -86,10 +84,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         { text: 'Full problem & persona profiles', included: true },
         { text: 'Complete opportunity rankings & scores', included: true },
         { text: 'Full historical demand graphs & charts', included: true },
-        { text: 'Full competitor vulnerability analysis', included: true },
-        { text: 'Development-ready 3-week MVP specs', included: true },
+        { text: 'Expanded alternatives mention analysis', included: true },
+        { text: 'AI-generated product and validation briefs', included: true },
         { text: 'Export research (Markdown / JSON / PRD)', included: true },
-        { text: 'Weekly emerging problem digest (coming soon)', included: true },
+        { text: 'Weekly emerging problem digest (planned)', included: false },
       ],
     },
     {
@@ -100,13 +98,13 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       description: 'Built for software agencies, venture studios, and product discovery teams.',
       features: [
         { text: 'Everything in Pro tier', included: true },
-        { text: 'Direct REST API access to problem database (coming soon)', included: true },
-        { text: 'Custom keyword tracking (coming soon)', included: true },
-        { text: 'Raw sentiment & discussion dumps', included: true },
+        { text: 'Direct REST API access to problem database (planned)', included: false },
+        { text: 'Custom keyword tracking (planned)', included: false },
+        { text: 'Raw discussion evidence export', included: true },
         { text: 'White-label client presentation briefs', included: true },
-        { text: 'Priority Gemini PRD generation queue', included: true },
-        { text: 'Multi-seat team workspace (5 seats) (coming soon)', included: true },
-        { text: 'Physical business & supply-chain signals (coming soon)', included: true },
+        { text: 'Up to 20 AI briefs per day', included: true },
+        { text: 'Multi-seat team workspace (planned)', included: false },
+        { text: 'Physical business and supply-chain signals (planned)', included: false },
       ],
     },
   ];
@@ -125,13 +123,13 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-white">DemandRadar Monetization & Gating</h2>
+                <h2 className="text-base font-bold text-white">Plans & Pricing</h2>
                 <span className="rounded bg-cyan-950 px-2 py-0.5 text-[10px] font-mono text-cyan-300 border border-cyan-800">
-                  Business Model Engine
+                  Plan comparison
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                You're not selling software development. You're selling validated market insight.
+                Source-linked market research and product hypotheses to help teams decide what to build next.
               </p>
             </div>
           </div>
@@ -151,35 +149,17 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <div className="space-y-1">
                 <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400">
                   <Zap className="h-3.5 w-3.5" />
-                  The Economic Thesis
+                  Why the research matters
                 </span>
                 <h3 className="text-sm font-bold text-white">
-                  Why Developers Gladly Pay $29/Month
+                  Research before committing to a build
                 </h3>
                 <p className="text-xs text-slate-300 max-w-2xl">
-                  Developers waste 3-6 months and $10k+ building tools nobody wants. One single validated human problem with verified willingness-to-pay easily justifies a $29 subscription.
+                  Demand signals can reduce guesswork, but they do not guarantee product-market fit. Evaluate evidence, test assumptions with buyers and validate pricing before investing.
                 </p>
               </div>
 
-              {/* Quick switch simulator */}
-              <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800 shrink-0 text-right">
-                <div className="text-[11px] text-slate-400 mb-1">Simulate Current App Session:</div>
-                <div className="flex items-center gap-1.5">
-                  {(['Free', 'Starter', 'Pro', 'Business'] as PricingTier[]).map((tier) => (
-                    <button
-                      key={tier}
-                      onClick={() => onSelectPlan(tier)}
-                      className={`px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
-                        activePlan === tier
-                          ? 'bg-amber-500 text-slate-950 shadow-sm'
-                          : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-                      }`}
-                    >
-                      {tier}
-                    </button>
-                  ))}
-                </div>
-              </div>
+
             </div>
           </div>
 
@@ -235,13 +215,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
                   <div className="mt-5 pt-3 border-t border-slate-800/60 space-y-1.5">
                     <button
-                      onClick={() => {
-                        if (t.tier === 'Free') {
-                          onSelectPlan(t.tier);
-                        } else {
-                          onOpenCheckout(t.tier);
-                        }
-                      }}
+                      disabled={isCurrent || t.tier === 'Free'}
+                      onClick={() => { if (t.tier !== 'Free') onOpenCheckout(t.tier); }}
                       className={`w-full py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                         isCurrent
                           ? 'bg-emerald-950 text-emerald-300 border border-emerald-700 cursor-default'
@@ -250,7 +225,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                           : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                       }`}
                     >
-                      {isCurrent ? 'Active Plan' : t.tier === 'Free' ? 'Switch to Free' : `Subscribe (${t.price}/mo)`}
+                      {isCurrent ? 'Active Plan' : t.tier === 'Free' ? 'Free tier included' : `Subscribe (${t.price}/mo)`}
                     </button>
                   </div>
                 </div>
@@ -259,11 +234,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
 
           {/* Interactive MRR Projection Calculator */}
+          <p className="-mt-5 text-[10px] text-slate-500">Illustrative arithmetic only — not actual subscribers or revenue. Excludes churn, taxes, payment fees, refunds and operating costs.</p>
           <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
             <div className="flex items-center gap-2 mb-3">
               <Calculator className="h-4 w-4 text-cyan-400" />
               <h4 className="text-xs font-bold uppercase tracking-wider text-white">
-                Platform Economics: Subscription Revenue Calculator
+                Illustrative Subscription Scenario Calculator
               </h4>
             </div>
 
@@ -301,12 +277,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               </div>
 
               <div className="rounded-lg bg-slate-900 border border-slate-800 p-3 text-center sm:text-right">
-                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Estimated Annual Run-Rate</span>
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Scenario ARR · not a forecast</span>
                 <div className="text-xl font-mono font-black text-emerald-400">
                   ${projectedARR.toLocaleString()} <span className="text-xs font-sans text-slate-400 font-normal">/yr</span>
                 </div>
                 <span className="text-[11px] font-mono text-cyan-300">
-                  (${projectedMRR.toLocaleString()} MRR)
+                  (${projectedMRR.toLocaleString()} scenario MRR)
                 </span>
               </div>
             </div>
@@ -315,7 +291,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
         {/* Footer */}
         <div className="border-t border-slate-800 px-6 py-3 bg-slate-950 flex items-center justify-between text-xs text-slate-400">
-          <span>Stripe Checkout integration ready for deployment</span>
+          <span>Secure checkout provided by Dodo Payments</span>
           <button
             onClick={onClose}
             className="rounded-lg bg-slate-800 px-4 py-1.5 text-xs font-medium text-white hover:bg-slate-700 transition-colors cursor-pointer"

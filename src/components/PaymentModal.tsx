@@ -9,12 +9,14 @@ interface PaymentModalProps {
   onClose: () => void;
   selectedTier: PricingTier;
   authOnly?: boolean;
+  activePlan?: PricingTier;
+  onOpenPricing?: () => void;
 }
 
 const input = 'w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500';
 const btn = 'w-full py-2.5 rounded-lg text-sm font-bold cursor-pointer disabled:opacity-50';
 
-export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, selectedTier, authOnly }) => {
+export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, selectedTier, authOnly, activePlan = 'Free', onOpenPricing }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [mode, setMode] = useState<'signin' | 'signup'>('signup');
   const [email, setEmail] = useState('');
@@ -71,7 +73,22 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, sel
 
         {session ? (
           <>
-            <p className="text-xs text-slate-400">Signed in as {session.user.email}</p>
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 space-y-2">
+              <div>
+                <span className="block text-[10px] uppercase tracking-wider text-slate-500">Signed in as</span>
+                <span className="text-xs text-slate-200">{session.user.email}</span>
+              </div>
+              {authOnly && (
+                <>
+                  <div className="border-t border-slate-800 pt-2">
+                    <span className="block text-[10px] uppercase tracking-wider text-slate-500">Current plan</span>
+                    <span className="text-sm font-semibold text-white">{activePlan}</span>
+                  </div>
+                  {onOpenPricing && <button onClick={onOpenPricing} className="text-xs font-semibold text-slate-200 underline underline-offset-4">View plans</button>}
+                </>
+              )}
+            </div>
+            {authOnly && <p className="text-[10px] text-slate-500">Billing is processed by Dodo Payments. In-app billing management is not currently available.</p>}
             {!authOnly && (
               <button onClick={pay} disabled={busy} className={`${btn} bg-cyan-500 text-slate-950 hover:bg-cyan-400 flex items-center justify-center gap-2`}>
                 <Lock size={14} /> {busy ? 'Opening checkout…' : 'Continue to secure checkout'}

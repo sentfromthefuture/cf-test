@@ -74,8 +74,10 @@ export const OpportunityIntelligenceView: React.FC<OpportunityIntelligenceViewPr
 ## Opportunity: ${opportunity.title}
 - Industry: ${opportunity.category}
 - Opportunity Score: ${opportunity.scores.compositeScore}/100
-- Discussions Scanned: ${opportunity.discussions} (${opportunity.growth} growth)
-- Target ACV: ${opportunity.estACV}
+- Research status: ${opportunity.live ? 'Live collected research' : 'Illustrative demo sample'}
+- Independent discussions: ${opportunity.live?.uniqueDiscussions ?? opportunity.discussions}
+- Discussion growth: ${opportunity.growth}
+- Potential ACV: ${opportunity.estACV} (pricing hypothesis; validate with buyers)
 
 ### 1. Target Persona
 ${opportunity.targetPersona}
@@ -83,7 +85,7 @@ ${opportunity.targetPersona}
 ### 2. The Core Problem
 ${opportunity.problemDescription}
 
-### 3. Incumbent Weaknesses (Why existing solutions fail)
+### 3. Existing alternatives and reported gaps
 ${opportunity.existingFails}
 
 ### 4. Software Solution & MVP Features
@@ -93,20 +95,44 @@ ${opportunity.suggestedFeatures.map(f => `- ${f}`).join('\n')}
 ### 5. Monetization Strategy
 ${opportunity.monetization}
 
-### 6. Competitor Vulnerabilities
-${opportunity.competitors.map(c => `- **${c.name}** (${c.pricing}): Vulnerability: ${c.weakness}`).join('\n')}
+### 6. Alternatives & observed mentions
+${opportunity.competitors.map(c => `- **${c.name}** (${c.pricing}): Discussion context: ${c.weakness}`).join('\n')}
 
-### 7. Verifiable Evidence Quotes
-${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source} (${e.upvotes} upvotes)`).join('\n\n')}
+### 7. Source-linked discussion evidence
+${opportunity.evidence.length ? opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source} (${e.upvotes} engagement)${e.url ? `\n> Source: ${e.url}` : ''}${e.license ? `\n> Licence: ${e.license}` : ''}`).join('\n\n') : '- No source excerpts are available for this dossier.'}
 `;
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    if (!navigator.clipboard?.writeText) { setCopied(false); return; }
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }).catch(() => setCopied(false));
   };
 
   const handleDownloadPRD = () => {
     if (!canExport) { onOpenPricing(); return; }
-    const text = `# DemandRadar Market Intelligence Brief\n## Opportunity: ${opportunity.title}\n\nProblem:\n${opportunity.problemDescription}\n\nTarget ICP:\n${opportunity.targetPersona}\n\nFeatures:\n${opportunity.suggestedFeatures.join('\n')}\n\nMonetization:\n${opportunity.monetization}`;
+    const text = [
+      '# DemandRadar Market Intelligence Brief',
+      `## Opportunity: ${opportunity.title}`,
+      `Research status: ${opportunity.live ? 'Live collected research' : 'Illustrative demo sample'}` ,
+      `Independent discussions: ${opportunity.live?.uniqueDiscussions ?? opportunity.discussions}` ,
+      `Opportunity score: ${opportunity.scores.compositeScore}/100` ,
+      `Potential ACV: ${opportunity.estACV} (hypothesis; validate with buyers)` ,
+      '',
+      '## Problem',
+      opportunity.problemDescription,
+      '',
+      '## Target ICP',
+      opportunity.targetPersona,
+      '',
+      '## Suggested features',
+      ...opportunity.suggestedFeatures.map((feature) => `- ${feature}`),
+      '',
+      '## Monetization hypothesis',
+      opportunity.monetization,
+      '',
+      '## Source evidence',
+      ...(opportunity.evidence.length ? opportunity.evidence.map((e) => `- ${e.source}: ${e.quote} ${e.url ?? ''} (licence: ${e.license ?? 'not stated'})`) : ['No source excerpts available.']),
+    ].join('\n');
     const blob = new Blob([text], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -126,8 +152,8 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-wider">
-                Opportunity Intelligence Dossier
+              <span className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider">
+                {opportunity.live ? 'Live research dossier' : 'Illustrative demo dossier'}
               </span>
               <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] font-mono text-slate-300 border border-slate-700">
                 DR-{opportunity.id.toUpperCase()}
@@ -213,7 +239,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
             <div className="rounded-xl bg-slate-950/80 p-3 border border-slate-800/80">
               <span className="text-[10px] text-slate-400 block mb-0.5">Willingness to Pay</span>
               <span className="font-mono text-base font-bold text-amber-300">{opportunity.willingnessToPay}</span>
-              <span className="text-[10px] text-slate-400 block mt-0.5">{opportunity.estACV} avg budget</span>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Pricing hypothesis · unverified</span>
             </div>
 
             <div className="rounded-xl bg-slate-950/80 p-3 border border-slate-800/80">
@@ -274,17 +300,17 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
           <div className="space-y-2.5 text-xs">
             {[
-              { label: 'Problem Frequency (25%)', val: opportunity.scores.problemFrequency, color: 'bg-blue-400' },
-              { label: 'Demand Growth (20%)', val: opportunity.scores.demandGrowth, color: 'bg-emerald-400' },
-              { label: 'Pain Intensity (20%)', val: opportunity.scores.painIntensity, color: 'bg-rose-400' },
-              { label: 'Willingness to Pay (15%)', val: opportunity.scores.willingnessToPay, color: 'bg-amber-400' },
-              { label: 'Competition Gap (10%)', val: opportunity.scores.competitionGap, color: 'bg-purple-400' },
-              { label: 'Development Feasibility (10%)', val: opportunity.scores.developmentFeasibility, color: 'bg-sky-400' },
+              { key: 'problemFrequency' as const, label: 'Problem Frequency', val: opportunity.scores.problemFrequency, color: 'bg-blue-400' },
+              { key: 'demandGrowth' as const, label: 'Demand Growth', val: opportunity.scores.demandGrowth, color: 'bg-emerald-400' },
+              { key: 'painIntensity' as const, label: 'Pain Intensity', val: opportunity.scores.painIntensity, color: 'bg-rose-400' },
+              { key: 'willingnessToPay' as const, label: 'Willingness to Pay', val: opportunity.scores.willingnessToPay, color: 'bg-amber-400' },
+              { key: 'competitionGap' as const, label: 'Competition Gap', val: opportunity.scores.competitionGap, color: 'bg-purple-400' },
+              { key: 'developmentFeasibility' as const, label: 'Development Feasibility', val: opportunity.scores.developmentFeasibility, color: 'bg-sky-400' },
             ].map((m, idx) => (
               <div key={idx} className="space-y-1">
                 <div className="flex justify-between text-[11px] text-slate-400">
                   <span>{m.label}</span>
-                  <span className="font-mono font-bold text-slate-200">{m.val}%</span>
+                  <span className="font-mono font-bold text-slate-200">{opportunity.live?.basis[m.key] === 'insufficient_data' ? 'n/a' : `${m.val}%${opportunity.live?.basis[m.key] === 'ai_estimate' ? '*' : ''}`}</span>
                 </div>
                 <div className="h-1.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800/80">
                   <div className={`h-full rounded-full ${m.color}`} style={{ width: `${m.val}%` }}></div>
@@ -294,7 +320,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
           </div>
 
           <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-800">
-            Backed by mathematical clustering of 4,200+ distinct source comments.
+            {opportunity.live ? `Grouped from ${opportunity.live.uniqueDiscussions.toLocaleString()} independent discussions across ${opportunity.live.sourceCount} source(s).` : 'Illustrative demo content — no live source evidence is attached to this sample.'}
           </p>
         </div>
       </div>
@@ -377,7 +403,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
         </div>
       )}
 
-      {/* Tab 2: Competitor Vulnerability Matrix */}
+      {/* Tab 2: Alternatives Mentioned in Discussions */}
       {activeTab === 'competitors' && (
         <div className="relative">
           {/* Paywall preview toggle banner */}
@@ -398,17 +424,17 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
           <div className={`space-y-4 ${activePlan === 'Free' ? 'blur-xs select-none pointer-events-none' : ''}`}>
             {activePlan === 'Starter' && (
-              <p className="text-[11px] text-amber-300">Starter shows a limited competitor view. Upgrade to Pro for the full vulnerability matrix.</p>
+              <p className="text-[11px] text-amber-300">Starter shows a limited competitor view. Upgrade to Pro for the full alternatives analysis.</p>
             )}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <Swords className="h-5 w-5 text-purple-400" />
-                    Incumbent Vulnerability & Gap Matrix
+                    Alternatives Mentioned in Discussions
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Why users are actively looking for alternatives and where existing incumbents drop the ball.
+                    Names mentioned in source discussions. A mention is not proof of market share, product quality or a competitor weakness.
                   </p>
                 </div>
               </div>
@@ -425,7 +451,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
                     <div>
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-rose-400 block mb-1">
-                        Fatal Incumbent Vulnerability
+                        What the discussion indicates
                       </span>
                       <p className="text-xs text-slate-300 leading-relaxed">
                         {comp.weakness}
@@ -434,10 +460,10 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
                     <div className="pt-2 border-t border-slate-800/80">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-cyan-400 block mb-1">
-                        Our Attack Wedge
+                        Potential product angle · hypothesis
                       </span>
                       <p className="text-xs text-slate-400">
-                        Simpler, modern single-focus API ledger with 5-minute setup and zero enterprise bloat.
+                        Validate whether a focused workflow could address this recurring need; this is a product hypothesis, not a measured competitor gap.
                       </p>
                     </div>
                   </div>
@@ -453,7 +479,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 <Lock className="h-6 w-6" />
               </div>
               <h3 className="text-base font-bold text-white mb-1">
-                Detailed Competitor Vulnerability Matrix is Gated
+                Mentioned Alternatives is Gated
               </h3>
               <p className="text-xs text-slate-300 max-w-md mb-4">
                 Pro subscribers get complete competitor breakdowns (competitors named in the discussions) and positioning wedges.
@@ -571,11 +597,11 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
 
                 <div className="rounded-xl bg-slate-950 p-4 border border-slate-800 space-y-2">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400 block">
-                    Estimated Build Budget
+                    Illustrative Build-Cost Estimate
                   </span>
                   <p className="font-mono text-slate-200 font-bold">{opportunity.budget}</p>
                   <p className="text-[11px] text-slate-400">
-                    Accounts for domain, hosting, authentication, SMS/email relays, and Stripe setup.
+                    Directional estimate only. Actual costs depend on scope, hosting, integrations and vendor pricing.
                   </p>
                 </div>
 
@@ -585,7 +611,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                   </span>
                   <p className="font-mono text-slate-200 font-bold">{opportunity.businessModel}</p>
                   <p className="text-[11px] text-slate-400">
-                    Target ACV {opportunity.estACV}. Break-even requires fewer than 15 paying customers.
+                    Potential ACV: {opportunity.estACV}. Treat this as a pricing hypothesis until validated with buyers.
                   </p>
                 </div>
               </div>
@@ -593,20 +619,20 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
               {/* Step-by-Step Build Sprints */}
               <div className="rounded-xl bg-slate-950 p-4 border border-slate-800 space-y-3">
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  3-Week Sprint Execution Blueprint
+                  Suggested Validation Sequence
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
                   <div className="rounded-lg bg-slate-900 p-3 border border-slate-800 space-y-1">
                     <span className="font-mono text-[10px] font-bold text-cyan-400">Week 1: Core Engine</span>
-                    <p className="text-slate-300">Build webhook endpoints and data schema. Test bidirectional sync with mock POS/payment accounts.</p>
+                    <p className="text-slate-300">Interview 5–10 target users. Confirm the problem frequency, current workaround and urgency.</p>
                   </div>
                   <div className="rounded-lg bg-slate-900 p-3 border border-slate-800 space-y-1">
                     <span className="font-mono text-[10px] font-bold text-amber-400">Week 2: User Action UI</span>
-                    <p className="text-slate-300">Create the mobile reconciliation action screen and alert settings. Integrate Stripe Billing.</p>
+                    <p className="text-slate-300">Prototype the smallest workflow that addresses the repeated pain point; test it with target users.</p>
                   </div>
                   <div className="rounded-lg bg-slate-900 p-3 border border-slate-800 space-y-1">
                     <span className="font-mono text-[10px] font-bold text-emerald-400">Week 3: GTM Outreach</span>
-                    <p className="text-slate-300">Directly DM the authors of the 4,200 indexed complaints offering a 50% lifetime discount.</p>
+                    <p className="text-slate-300">Test a clear pricing offer with qualified prospects. Do not treat public discussion authors as sales leads without consent.</p>
                   </div>
                 </div>
               </div>
@@ -622,7 +648,7 @@ ${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source
                 Development Specs & PRD Exports are Pro Features
               </h3>
               <p className="text-xs text-slate-300 max-w-md mb-4">
-                Unlock full technical blueprints, database schemas, and 3-week sprint roadmaps ready for your development team.
+                Unlock technical planning, product specifications and a suggested validation roadmap for your development team.
               </p>
               <div className="flex items-center gap-3">
                 <button

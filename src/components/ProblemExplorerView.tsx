@@ -36,7 +36,8 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
   const [sortBy, setSortBy] = useState<'score' | 'growth' | 'discussions' | 'urgency'>('score');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
 
-  const categories = ['All', 'Retail & Commerce', 'Real Estate & PropTech', 'Freelance & Agency Ops', 'Hospitality & Food Ops', 'Field Services & Trades', 'Regulatory & Enterprise AI', 'Healthcare & Wellness'];
+  // Derive filter options from the loaded dataset so new live industries are never hidden.
+  const categories = ['All', ...Array.from(new Set(opportunities.map((item) => item.category).filter(Boolean))).sort((x, y) => x.localeCompare(y))];
 
   const filtered = useMemo(() => {
     return opportunities.filter(item => {
@@ -82,19 +83,19 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Searchable repository of recurring human pain points extracted from collected public discussions.
+            Search and compare problem clusters. Live records retain source links and distinguish measured evidence from AI estimates.
           </p>
         </div>
 
         {/* Live Filter Summary Pills */}
         <div className="flex items-center gap-3">
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Indexed Discussions</span>
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Discussions in matching clusters</span>
             <span className="font-mono font-bold text-white">{totalDiscussions.toLocaleString()}</span>
           </div>
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Average Growth</span>
-            <span className="font-mono font-bold text-emerald-400">+{avgGrowth}%</span>
+            <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Average cluster growth</span>
+            <span className="font-mono font-bold text-slate-200">{avgGrowth > 0 ? '+' : ''}{avgGrowth}%</span>
           </div>
           <div className="flex rounded-lg border border-slate-800 bg-slate-900 p-1">
             <button
@@ -197,7 +198,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
           <div className="flex items-center gap-2 text-slate-300">
             <Crown className="h-4 w-4 text-amber-400 shrink-0" />
             <span>
-              <strong>Free Plan Preview:</strong> Displaying high-signal opportunities. Upgrade to <strong>Pro ($29/mo)</strong> to unlock historical demand graphs, competitor vulnerability audits, and development-ready PRDs.
+              <strong>Free Plan Preview:</strong> Displaying high-signal opportunities. Upgrade to <strong>Pro ($29/mo)</strong> to unlock historical demand graphs, source-backed alternatives research, and AI-generated product briefs.
             </span>
           </div>
           <button
@@ -339,7 +340,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
                     <span className="font-mono font-bold text-emerald-400">{item.growth}</span>
                   </div>
                   <div className="rounded-lg bg-slate-950 p-2 border border-slate-800/60">
-                    <span className="text-[10px] text-slate-400 block">Target ACV</span>
+                    <span className="text-[10px] text-slate-400 block">ACV hypothesis</span>
                     <span className="font-mono font-bold text-amber-300">{item.estACV}</span>
                   </div>
                 </div>

@@ -21,13 +21,13 @@ import {
   FileCheck
 } from 'lucide-react';
 
-export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void }> = ({ activePlan, onOpenPricing }) => {
+export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void; industries?: string[] }> = ({ activePlan, onOpenPricing, industries = [] }) => {
   const [industry, setIndustry] = useState('Retail & Commerce');
   const [country, setCountry] = useState('United States & Global');
-  const [difficulty, setDifficulty] = useState('Medium');
-  const [budget, setBudget] = useState('$1,000 - $3,000');
-  const [technology, setTechnology] = useState('Next.js + Postgres + Stripe');
-  const [businessModel, setBusinessModel] = useState('B2B Tiered SaaS');
+  const [difficulty, setDifficulty] = useState('Medium (2-4 weeks)');
+  const [budget, setBudget] = useState('$1,000 - $3,000 (Lean MVP)');
+  const [technology, setTechnology] = useState('React + Vite + Supabase + Cloudflare Pages');
+  const [businessModel, setBusinessModel] = useState('B2B Tiered SaaS ($49 - $299/mo)');
   const [customTopic, setCustomTopic] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -36,17 +36,20 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const industryOptions = Array.from(new Set([...industries, 'Retail & Commerce', 'Real Estate & PropTech', 'Freelance & Agency Ops', 'Hospitality & Food Ops', 'Field Services & Trades', 'Regulatory & AI Governance', 'Healthcare & Wellness', 'Developer Tools & DevOps'])).sort((a, b) => a.localeCompare(b));
+
   const steps = [
     'Reviewing collected public discussions...',
     'Clustering recurring complaints into root-cause bottlenecks...',
-    'Scoring commercial willingness-to-pay and competitor gaps...',
-    'Synthesizing 3-week MVP technical architecture & PRD specification...',
+    'Comparing observed signals and evidence gaps...',
+    'Drafting product, technical and validation hypotheses...',
   ];
 
   const handleGenerate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setLoading(true);
     setErrorMsg(null);
+    setGeneratedBrief(null);
     setLoadingStep(0);
 
     const stepInterval = setInterval(() => {
@@ -74,7 +77,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
 
       const data = await res.json();
       clearInterval(stepInterval);
-      if (res.status === 401 || res.status === 403 || res.status === 429 || res.status === 503) {
+      if (!res.ok) {
         setErrorMsg(data.error || 'Not allowed');
         return;
       }
@@ -86,59 +89,8 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
     } catch (err: any) {
       console.error('Error generating brief:', err);
       clearInterval(stepInterval);
-      // Fallback display if network issue
-      setGeneratedBrief({
-        productName: `OmniSync: ${industry} Ledger`,
-        tagline: 'Autonomous real-time event reconciliation for modern operators.',
-        opportunityScore: 88,
-        marketSizeTAM: '$3.8B Addressable Market',
-        estMonthlyRevenueYear1: '$15,000 - $40,000 MRR',
-        problemStatement: `Operators in ${industry} struggle with fragmented, brittle manual data handoffs between disconnected systems, losing hours every week resolving ghost records.`,
-        targetICP: {
-          role: 'Operations Director / Lead Developer',
-          companySize: '5-50 Employees',
-          annualBudget: '$2,400/yr software budget',
-          coreFrustration: 'Endless hours lost reconciling out-of-sync databases and CSV exports.'
-        },
-        scoreBreakdown: {
-          problemFrequency: 90,
-          demandGrowth: 86,
-          painIntensity: 92,
-          willingnessToPay: 88,
-          competitionGap: 84,
-          developmentFeasibility: 85
-        },
-        competitorMatrix: [
-          { name: 'Legacy Incumbent Suite', pricing: '$400/mo', vulnerability: 'Ancient SOAP APIs with frequent sync timeouts', ourWedge: 'Sub-second webhook streaming' },
-          { name: 'Generic No-Code Zapier', pricing: '$49/mo', vulnerability: 'No audit logs or financial reconciliation logic', ourWedge: 'Idempotent transactional safety ledger' }
-        ],
-        mvpScope: {
-          coreFeatures: [
-            'Instant webhook ingestion with automated payload deduplication',
-            'Conflict-resolution rules engine (Last-Write-Wins or Manual Review)',
-            'Real-time discrepancy alerts to Slack and WhatsApp',
-            'Self-service tenant onboarding portal'
-          ],
-          outOfScope: ['Complex on-premise Active Directory sync', 'Custom ERP migrations in v1']
-        },
-        pricingTiers: [
-          { tier: 'Starter', price: '$29/mo', features: ['Up to 5,000 sync events', 'Single workspace', 'Email support'] },
-          { tier: 'Growth', price: '$89/mo', features: ['Up to 50,000 sync events', 'Real-time Slack webhooks', 'Priority queue'] },
-          { tier: 'Scale', price: '$249/mo', features: ['Unlimited sync events', 'Custom webhook transformers', 'Dedicated SLA'] }
-        ],
-        architectureSpec: {
-          frontend: `${technology} with optimistic UI updates`,
-          backend: 'Node.js / Express or Next.js serverless functions with Redis queue',
-          database: 'PostgreSQL with audit trails and transactional guarantees',
-          keyIntegrations: ['Stripe Billing', 'SendGrid / Twilio Alerts', 'Target Industry APIs'],
-          dataModelSummary: 'Tenants, Integrations, EventLogs, Reconciliations, and AlertRules tables.'
-        },
-        gtmStrategy: [
-          { phase: 'Week 1', action: 'Reach out to people in the linked discussions that describe this problem' },
-          { phase: 'Week 2', action: 'Publish interactive "Cost of Manual Errors" free calculator to drive inbound traffic' },
-          { phase: 'Week 3', action: 'Launch on ProductHunt and industry-specific Discord/Slack groups with lifetime early-bird tier' }
-        ]
-      });
+      setGeneratedBrief(null);
+      setErrorMsg(err?.message || 'The brief could not be generated. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -148,8 +100,10 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
     if (!generatedBrief) return;
     const text = `# Project Brief: ${generatedBrief.productName}
 **Tagline:** ${generatedBrief.tagline}
-**Opportunity Score:** ${generatedBrief.opportunityScore}/100
-**TAM:** ${generatedBrief.marketSizeTAM} | **Est. Year 1 Revenue:** ${generatedBrief.estMonthlyRevenueYear1}
+**AI hypothesis score:** ${generatedBrief.opportunityScore}/100
+**Research status:** ${generatedBrief.researchStatus || 'Not specified'}
+**Market-size hypothesis:** ${generatedBrief.marketSizeTAM}
+**Year-one revenue scenario (not forecast):** ${generatedBrief.estMonthlyRevenueYear1}
 
 ## Problem Statement
 ${generatedBrief.problemStatement}
@@ -157,10 +111,10 @@ ${generatedBrief.problemStatement}
 ## Target ICP
 - **Role:** ${generatedBrief.targetICP?.role}
 - **Company Size:** ${generatedBrief.targetICP?.companySize}
-- **Annual Budget:** ${generatedBrief.targetICP?.annualBudget}
+- **Budget hypothesis:** ${generatedBrief.targetICP?.annualBudget}
 - **Core Frustration:** ${generatedBrief.targetICP?.coreFrustration}
 
-## 3-Week MVP Feature Specification
+## Suggested MVP Feature Scope (hypothesis)
 ### Core Features:
 ${generatedBrief.mvpScope?.coreFeatures?.map((f: string) => `- ${f}`).join('\n')}
 
@@ -177,12 +131,22 @@ ${generatedBrief.mvpScope?.outOfScope?.map((f: string) => `- ${f}`).join('\n')}
 ## Monetization & Pricing
 ${generatedBrief.pricingTiers?.map((t: any) => `### ${t.tier} (${t.price})\n${t.features?.map((f: string) => `- ${f}`).join('\n')}`).join('\n\n')}
 
-## Go-To-Market Sprint Plan
+## Suggested Validation Plan
 ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).join('\n')}
+
+## Research Basis
+${generatedBrief.researchBasis?.clusters?.map((cluster: any) => `- ${cluster.title}: ${cluster.independentDiscussions} discussions across ${cluster.sourceCount} sources; confidence ${cluster.confidence}`).join('\n') || 'No research clusters attached.'}
+
+## Source Evidence
+${generatedBrief.researchBasis?.evidence?.map((item: any) => `- ${item.source}: ${item.title} — ${item.url} (licence: ${item.license})`).join('\n') || 'No source evidence attached.'}
+
+Commercial estimates, proposed pricing and product recommendations are hypotheses requiring independent validation.
 `;
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    if (!navigator.clipboard?.writeText) return;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }).catch(() => setCopied(false));
   };
 
   if (activePlan === 'Free' || activePlan === 'Starter') {
@@ -206,7 +170,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
               AI Opportunity Generator
             </h1>
             <span className="rounded bg-gradient-to-r from-cyan-500 to-blue-500 px-2 py-0.5 text-xs font-mono font-bold text-white shadow-xs">
-              GEMINI 3.8 FLASH
+              GEMINI AI
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
@@ -236,14 +200,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
               onChange={(e) => setIndustry(e.target.value)}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-white focus:border-cyan-500 focus:outline-none"
             >
-              <option value="Retail & Commerce">Retail & Multi-Location Commerce</option>
-              <option value="Real Estate & PropTech">Real Estate & Landlord Ops</option>
-              <option value="Freelance & Agency Ops">Freelance & Agency Operations</option>
-              <option value="Hospitality & Food Ops">Hospitality & Food Ops</option>
-              <option value="Field Services & Trades">Field Services, Plumbing & HVAC</option>
-              <option value="Regulatory & AI Governance">Regulatory & AI Governance</option>
-              <option value="Healthcare & Wellness">Dental & Private Healthcare Clinics</option>
-              <option value="Developer Tools & DevOps">Developer Tools & Cloud Infra</option>
+              {industryOptions.map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
           </div>
 
@@ -299,6 +256,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
               onChange={(e) => setTechnology(e.target.value)}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-white focus:border-cyan-500 focus:outline-none"
             >
+              <option value="React + Vite + Supabase + Cloudflare Pages">React + Vite + Supabase + Cloudflare Pages</option>
               <option value="Next.js + PostgreSQL + Tailwind">Next.js + PostgreSQL + Tailwind</option>
               <option value="React + Node.js + Express + Redis">React + Node.js + Express + Redis</option>
               <option value="Python / FastAPI + Vector DB">Python / FastAPI + Vector DB</option>
@@ -342,7 +300,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
           <span className="text-xs text-slate-400 flex items-center gap-1.5">
             <ShieldCheck className="h-4 w-4 text-emerald-400" />
-            Grounded in collected public discussions where evidence exists; estimates are labelled.
+            Uses collected clusters and source-linked evidence where available. Commercial estimates remain hypotheses.
           </span>
           <button
             type="submit"
@@ -363,6 +321,13 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
           </button>
         </div>
       </form>
+
+      {errorMsg && (
+        <div role="alert" className="rounded-xl border border-rose-900/70 bg-rose-950/30 px-4 py-3 text-xs text-rose-200">
+          <strong className="block mb-1">Brief generation stopped</strong>
+          {errorMsg}
+        </div>
+      )}
 
       {/* Loading Progress State */}
       {loading && (
@@ -395,10 +360,10 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <span className="rounded bg-cyan-950 px-2 py-0.5 text-xs font-mono font-bold text-cyan-300 border border-cyan-800">
-                  DEVELOPMENT-READY PRD
+                  AI-GENERATED PRODUCT HYPOTHESIS
                 </span>
                 <span className="text-xs font-mono text-emerald-400">
-                  Score: {generatedBrief.opportunityScore}/100
+                  AI hypothesis score: {generatedBrief.opportunityScore}/100
                 </span>
               </div>
               <h2 className="text-2xl font-black text-white">
@@ -420,14 +385,63 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
             </div>
           </div>
 
-          {/* Quick Metrics Banner */}
+          {generatedBrief.researchBasis?.clusters?.length > 0 && (
+        <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-5 md:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-white">Research basis</h3>
+              <p className="text-xs text-slate-400 mt-1">Actual DemandRadar clusters used as context for this AI-generated brief.</p>
+            </div>
+            <span className="text-xs text-slate-400">{generatedBrief.researchBasis.clusters.length} clusters · {generatedBrief.researchBasis.evidence?.length ?? 0} source records</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {generatedBrief.researchBasis.clusters.map((cluster: any) => (
+              <div key={cluster.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <h4 className="text-xs font-semibold text-white">{cluster.title}</h4>
+                  <span className="shrink-0 rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-300 capitalize">{cluster.confidence} confidence</span>
+                </div>
+                <p className="text-[11px] text-slate-400">{cluster.industry || 'Industry unclassified'}{cluster.useCase ? ` · ${cluster.useCase}` : ''}</p>
+                <div className="flex flex-wrap gap-2 text-[10px] text-slate-300">
+                  <span>{Number(cluster.independentDiscussions || 0).toLocaleString()} discussions</span>
+                  <span>·</span><span>{cluster.sourceCount} sources</span>
+                  <span>·</span><span>{cluster.growthRate == null ? 'Growth n/a' : `${cluster.growthRate > 0 ? '+' : ''}${cluster.growthRate}% growth`}</span>
+                </div>
+                <p className="text-[10px] text-slate-500">Sources: {(cluster.sources || []).join(', ') || 'not recorded'}</p>
+                <p className="text-[10px] text-slate-500">WTP evidence signals: {cluster.willingnessToPaySignals ?? 0}</p>
+                {Object.keys(cluster.competitorsNamed || {}).length > 0 && (
+                  <p className="text-[10px] text-slate-500">Alternatives mentioned: {Object.entries(cluster.competitorsNamed).map(([name, count]) => `${name} (${count})`).join(', ')}</p>
+                )}
+              </div>
+            ))}
+          </div>
+          {generatedBrief.researchBasis.evidence?.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-slate-200">Original discussions</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {generatedBrief.researchBasis.evidence.slice(0, 8).map((item: any, index: number) => (
+                  <a key={`${item.url}-${index}`} href={item.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-600">
+                    <span className="block text-[11px] font-medium text-slate-200">{item.title || item.clusterTitle}</span>
+                    <span className="mt-1 block text-[10px] text-slate-500">{item.source} · {item.license} · {item.analysisMethod} analysis</span>
+                    {item.attribution && <span className="mt-1 block text-[10px] text-slate-500">Attribution: {item.attribution}</span>}
+                    {item.excerpt && <span className="mt-1 block text-[10px] leading-relaxed text-slate-400">{item.excerpt}</span>}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="text-[10px] text-slate-500 border-t border-slate-800 pt-3">Discussion volume and growth describe observed public conversations, not proven purchase demand. Market size, revenue, pricing, competitor interpretation and the proposed solution are AI hypotheses requiring independent validation.</p>
+        </section>
+      )}
+
+      {/* Quick Metrics Banner */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
             <div className="rounded-xl bg-slate-950 p-3 border border-slate-800">
-              <span className="text-[10px] text-slate-400 block mb-0.5">Addressable Market (TAM)</span>
+              <span className="text-[10px] text-slate-400 block mb-0.5">Market-size hypothesis</span>
               <span className="font-mono text-sm font-bold text-white">{generatedBrief.marketSizeTAM}</span>
             </div>
             <div className="rounded-xl bg-slate-950 p-3 border border-slate-800">
-              <span className="text-[10px] text-slate-400 block mb-0.5">Est. Year 1 Run-Rate</span>
+              <span className="text-[10px] text-slate-400 block mb-0.5">Year-one revenue scenario · not forecast</span>
               <span className="font-mono text-sm font-bold text-emerald-400">{generatedBrief.estMonthlyRevenueYear1}</span>
             </div>
             <div className="rounded-xl bg-slate-950 p-3 border border-slate-800">
@@ -455,12 +469,12 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
             <div className="rounded-xl bg-slate-950 p-4 border border-slate-800 space-y-2">
               <h4 className="font-bold text-white uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                 <Info className="h-3.5 w-3.5 text-amber-400" />
-                Ideal Customer Profile (ICP)
+                Target customer hypothesis (ICP)
               </h4>
               <div className="space-y-1 text-slate-300">
                 <div><strong>Role:</strong> {generatedBrief.targetICP?.role}</div>
                 <div><strong>Company Size:</strong> {generatedBrief.targetICP?.companySize}</div>
-                <div><strong>Budget:</strong> {generatedBrief.targetICP?.annualBudget}</div>
+                <div><strong>Budget hypothesis:</strong> {generatedBrief.targetICP?.annualBudget}</div>
                 <div className="text-amber-300/90 text-[11px]">
                   <strong>Core Frustration:</strong> {generatedBrief.targetICP?.coreFrustration}
                 </div>
@@ -472,7 +486,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
           <div className="rounded-xl bg-slate-950 p-5 border border-slate-800 space-y-3 text-xs">
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] flex items-center gap-1.5">
               <Zap className="h-3.5 w-3.5 text-cyan-400" />
-              3-Week MVP Feature Scope
+              Suggested MVP Scope · hypothesis
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -528,7 +542,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
             <div className="rounded-xl bg-slate-950 p-4 border border-slate-800 space-y-3">
               <h4 className="font-bold text-white uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                 <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
-                Recommended Monetization Tiers
+                Illustrative Pricing Hypotheses
               </h4>
               <div className="space-y-2">
                 {generatedBrief.pricingTiers?.map((tier: any, idx: number) => (
@@ -550,7 +564,7 @@ ${generatedBrief.gtmStrategy?.map((s: any) => `- **${s.phase}:** ${s.action}`).j
           <div className="rounded-xl bg-slate-950 p-4 border border-slate-800 space-y-2 text-xs">
             <h4 className="font-bold text-white uppercase tracking-wider text-[11px] flex items-center gap-1.5">
               <Calendar className="h-3.5 w-3.5 text-blue-400" />
-              Day 1 - 21 Go-To-Market Sprint Plan
+              Suggested Validation Plan · not a forecast
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
               {generatedBrief.gtmStrategy?.map((gtm: any, idx: number) => (
