@@ -132,7 +132,7 @@ ${opportunity.evidence.length ? opportunity.evidence.map(e => `> "${e.quote}"\n>
       '',
       '## Source evidence',
       ...(opportunity.evidence.length ? opportunity.evidence.map((e) => `- ${e.source}: ${e.quote} ${e.url ?? ''} (licence: ${e.license ?? 'not stated'})`) : ['No source excerpts available.']),
-    ].join('\\n');
+    ].join('\n');
     const blob = new Blob([text], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
