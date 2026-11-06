@@ -198,7 +198,7 @@ export const ProblemExplorerView: React.FC<ProblemExplorerViewProps> = ({
           <div className="flex items-center gap-2 text-slate-300">
             <Crown className="h-4 w-4 text-amber-400 shrink-0" />
             <span>
-              <strong>Free Plan Preview:</strong> Displaying high-signal opportunities. Upgrade to <strong>Pro ($29/mo)</strong> to unlock historical demand graphs, competitor vulnerability audits, and development-ready PRDs.
+              <strong>Free Plan Preview:</strong> Displaying high-signal opportunities. Upgrade to <strong>Pro ($29/mo)</strong> to unlock historical demand graphs, source-backed alternatives research, and AI-generated product briefs.
             </span>
           </div>
           <button
