@@ -54,7 +54,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenScoring,
   activePlan,
 }) => {
-  const topOpportunity = opportunities[0];
+  const topOpportunity = [...opportunities].sort((a, b) => b.scores.compositeScore - a.scores.compositeScore)[0] ?? opportunities[0];
   const fastGrowing = [...opportunities].sort((a, b) => b.growthRate - a.growthRate).slice(0, 4);
   const ov = liveStatus === 'ready' ? overview : null;
   const topInd = ov?.industries.find((i) => i.industry !== 'Other') ?? null; // 'Other' is the unclassified bucket, not an industry
