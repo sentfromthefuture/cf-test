@@ -133,8 +133,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ isOpen, onClose, sel
               <button onClick={submitAuth} disabled={busy || !email || !password} className={`${btn} bg-cyan-500 text-slate-950 hover:bg-cyan-400`}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button>
             )}
             {mode === 'signin' && <button onClick={() => { setMode('reset'); setErr(''); }} className="w-full text-center text-xs text-slate-400 underline cursor-pointer">Forgot password?</button>}
-            <button onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setErr(''); }} className="w-full text-center text-xs text-slate-400 underline cursor-pointer">
-              {mode === 'signup' ? 'Already have an account? Sign in' : 'Back to sign in / create account'}
+            <button onClick={() => { setMode(mode === 'signup' ? 'signin' : mode === 'signin' ? 'signup' : 'signin'); setErr(''); }} className="w-full text-center text-xs text-slate-400 underline cursor-pointer">
+              {mode === 'signup' ? 'Already have an account? Sign in' : mode === 'signin' ? 'New here? Create an account' : 'Back to sign in'}
             </button>
           </>
         )}
