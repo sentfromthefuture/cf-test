@@ -34,7 +34,7 @@ export const onRequestGet = async ({ request, env }: { request: Request; env: En
   const periodEnd = sub?.current_period_end ?? null;
   const live = !!sub && (sub.status === 'active' ||
     (sub.status === 'cancelled' && periodEnd && new Date(periodEnd).getTime() > Date.now()));
-  const plan = live && LIMITS[sub.plan] ? sub.plan : 'Free';
+  const plan = live && ['Starter', 'Pro', 'Business'].includes(sub.plan) ? sub.plan : 'Free';
   const limit = LIMITS[plan] ?? 0;
   const used = Math.max(0, Number(usageRows[0]?.count ?? 0));
   const nextReset = new Date();
