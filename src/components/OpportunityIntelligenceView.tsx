@@ -110,7 +110,29 @@ ${opportunity.evidence.length ? opportunity.evidence.map(e => `> "${e.quote}"\n>
 
   const handleDownloadPRD = () => {
     if (!canExport) { onOpenPricing(); return; }
-    const text = `# DemandRadar Market Intelligence Brief\n## Opportunity: ${opportunity.title}\n\nProblem:\n${opportunity.problemDescription}\n\nTarget ICP:\n${opportunity.targetPersona}\n\nFeatures:\n${opportunity.suggestedFeatures.join('\n')}\n\nMonetization:\n${opportunity.monetization}`;
+    const text = [
+      '# DemandRadar Market Intelligence Brief',
+      `## Opportunity: ${opportunity.title}`,
+      `Research status: ${opportunity.live ? 'Live collected research' : 'Illustrative demo sample'}` ,
+      `Independent discussions: ${opportunity.live?.uniqueDiscussions ?? opportunity.discussions}` ,
+      `Opportunity score: ${opportunity.scores.compositeScore}/100` ,
+      `Potential ACV: ${opportunity.estACV} (hypothesis; validate with buyers)` ,
+      '',
+      '## Problem',
+      opportunity.problemDescription,
+      '',
+      '## Target ICP',
+      opportunity.targetPersona,
+      '',
+      '## Suggested features',
+      ...opportunity.suggestedFeatures.map((feature) => `- ${feature}`),
+      '',
+      '## Monetization hypothesis',
+      opportunity.monetization,
+      '',
+      '## Source evidence',
+      ...(opportunity.evidence.length ? opportunity.evidence.map((e) => `- ${e.source}: ${e.quote} ${e.url ?? ''} (licence: ${e.license ?? 'not stated'})`) : ['No source excerpts available.']),
+    ].join('\\n');
     const blob = new Blob([text], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
