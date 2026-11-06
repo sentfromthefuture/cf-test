@@ -46,7 +46,9 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: E
     'subscription.active': 'active',
     'subscription.renewed': 'active',
     'subscription.on_hold': 'on_hold',
+    'subscription.past_due': 'past_due',
     'subscription.paused': 'paused',
+    'subscription.unpaused': 'active',
     'subscription.cancelled': 'cancelled',
     'subscription.failed': 'failed',
     'subscription.expired': 'expired',
@@ -57,29 +59,34 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: E
   if (String(evt.type).startsWith('subscription.') && validUserId) {
     const plan = ({ [env.PID_STARTER]: 'Starter', [env.PID_PRO]: 'Pro', [env.PID_BUSINESS]: 'Business' } as Record<string, string>)[d.product_id];
     const status = typeof d.status === 'string' && d.status ? d.status : eventStatus[evt.type];
-    if (plan && status) {
-      const subscriptionUpdate: Record<string, unknown> = {
-        user_id: userId,
-        plan,
-        status,
-        updated_at: new Date().toISOString(),
-      };
-      // Do not erase previously linked identifiers or period dates when an event omits them.
-      if (typeof d.customer?.customer_id === 'string') subscriptionUpdate.dodo_customer_id = d.customer.customer_id;
-      if (typeof d.subscription_id === 'string') subscriptionUpdate.dodo_subscription_id = d.subscription_id;
-      const periodEnd = d.next_billing_date ?? d.expires_at ?? d.current_period_end;
-      if (typeof periodEnd === 'string') subscriptionUpdate.current_period_end = periodEnd;
+    const eventTime = typeof evt.timestamp === 'string' ? Date.parse(evt.timestamp) : Number.NaN;
 
-      const up = await sb('subscriptions?on_conflict=user_id', {
+    // Never fall back to delivery time: only Dodo's signed event timestamp
+    // can establish ordering. An invalid/missing timestamp must not mutate billing.
+    if (plan && status && Number.isFinite(eventTime)) {
+      const periodEnd = d.next_billing_date ?? d.expires_at ?? d.current_period_end;
+      const rpc = await sb('rpc/apply_dodo_subscription_event', {
         method: 'POST',
-        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify(subscriptionUpdate),
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify({
+          p_user: userId,
+          p_plan: plan,
+          p_status: status,
+          p_customer_id: typeof d.customer?.customer_id === 'string' ? d.customer.customer_id : null,
+          p_subscription_id: typeof d.subscription_id === 'string' ? d.subscription_id : null,
+          p_period_end: typeof periodEnd === 'string' ? periodEnd : null,
+          p_event_timestamp: new Date(eventTime).toISOString(),
+        }),
       });
-      if (!up.ok) {
+      if (!rpc.ok) {
         // Un-mark the event so Dodo's retry is processed instead of skipped.
         await sb(`webhook_events?event_id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
         return new Response('db error', { status: 500 });
       }
+      // A false RPC result is an intentionally ignored stale event, not a failure.
+    } else if (String(evt.type).startsWith('subscription.') && (!Number.isFinite(eventTime))) {
+      await sb(`webhook_events?event_id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
+      return new Response('invalid event timestamp', { status: 400 });
     }
   }
   return new Response('ok');
