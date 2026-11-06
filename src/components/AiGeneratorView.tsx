@@ -109,7 +109,7 @@ ${generatedBrief.problemStatement}
 ## Target ICP
 - **Role:** ${generatedBrief.targetICP?.role}
 - **Company Size:** ${generatedBrief.targetICP?.companySize}
-- **Annual Budget:** ${generatedBrief.targetICP?.annualBudget}
+- **Budget hypothesis:** ${generatedBrief.targetICP?.annualBudget}
 - **Core Frustration:** ${generatedBrief.targetICP?.coreFrustration}
 
 ## Suggested MVP Feature Scope (hypothesis)
@@ -428,6 +428,7 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
                   <a key={`${item.url}-${index}`} href={item.url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-600">
                     <span className="block text-[11px] font-medium text-slate-200">{item.title || item.clusterTitle}</span>
                     <span className="mt-1 block text-[10px] text-slate-500">{item.source} · {item.license} · {item.analysisMethod} analysis</span>
+                    {item.attribution && <span className="mt-1 block text-[10px] text-slate-500">Attribution: {item.attribution}</span>}
                     {item.excerpt && <span className="mt-1 block text-[10px] leading-relaxed text-slate-400">{item.excerpt}</span>}
                   </a>
                 ))}
@@ -478,7 +479,7 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
               <div className="space-y-1 text-slate-300">
                 <div><strong>Role:</strong> {generatedBrief.targetICP?.role}</div>
                 <div><strong>Company Size:</strong> {generatedBrief.targetICP?.companySize}</div>
-                <div><strong>Budget:</strong> {generatedBrief.targetICP?.annualBudget}</div>
+                <div><strong>Budget hypothesis:</strong> {generatedBrief.targetICP?.annualBudget}</div>
                 <div className="text-amber-300/90 text-[11px]">
                   <strong>Core Frustration:</strong> {generatedBrief.targetICP?.coreFrustration}
                 </div>
