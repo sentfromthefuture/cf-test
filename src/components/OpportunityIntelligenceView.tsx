@@ -74,8 +74,10 @@ export const OpportunityIntelligenceView: React.FC<OpportunityIntelligenceViewPr
 ## Opportunity: ${opportunity.title}
 - Industry: ${opportunity.category}
 - Opportunity Score: ${opportunity.scores.compositeScore}/100
-- Discussions Scanned: ${opportunity.discussions} (${opportunity.growth} growth)
-- Target ACV: ${opportunity.estACV}
+- Research status: ${opportunity.live ? 'Live collected research' : 'Illustrative demo sample'}
+- Independent discussions: ${opportunity.live?.uniqueDiscussions ?? opportunity.discussions}
+- Discussion growth: ${opportunity.growth}
+- Potential ACV: ${opportunity.estACV} (pricing hypothesis; validate with buyers)
 
 ### 1. Target Persona
 ${opportunity.targetPersona}
@@ -96,10 +98,10 @@ ${opportunity.monetization}
 ### 6. Alternatives & observed mentions
 ${opportunity.competitors.map(c => `- **${c.name}** (${c.pricing}): Discussion context: ${c.weakness}`).join('\n')}
 
-### 7. Verifiable Evidence Quotes
-${opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source} (${e.upvotes} upvotes)`).join('\n\n')}
+### 7. Source-linked discussion evidence
+${opportunity.evidence.length ? opportunity.evidence.map(e => `> "${e.quote}"\n> — ${e.author} on ${e.source} (${e.upvotes} engagement)${e.url ? `\n> Source: ${e.url}` : ''}${e.license ? `\n> Licence: ${e.license}` : ''}`).join('\n\n') : '- No source excerpts are available for this dossier.'}
 `;
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text).catch(() => setCopied(false));
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   };
