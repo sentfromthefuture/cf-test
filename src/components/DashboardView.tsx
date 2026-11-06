@@ -57,6 +57,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const topOpportunity = opportunities[0];
   const fastGrowing = [...opportunities].sort((a, b) => b.growthRate - a.growthRate).slice(0, 4);
   const ov = liveStatus === 'ready' ? overview : null;
+  const topInd = ov?.industries.find((i) => i.industry !== 'Other') ?? null; // 'Other' is the unclassified bucket, not an industry
   const dash = '—';
   const n = (v: number | undefined | null) => (ov && v !== undefined && v !== null ? v.toLocaleString() : dash);
   const delta = ov && ov.records_prev_24h > 0 ? Math.round(((ov.records_24h - ov.records_prev_24h) / ov.records_prev_24h) * 100) : null;
@@ -99,7 +100,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 px-4 py-3 text-xs font-semibold text-slate-200 hover:bg-slate-700 hover:text-white transition-all cursor-pointer"
             >
               <Search className="h-4 w-4 text-slate-400" />
-              Explore Database{ov ? ` (${ov.clusters_total.toLocaleString()})` : ''}
+              Explore Database{ov && !isDemo ? ` (${opportunities.length.toLocaleString()})` : ''}
             </button>
           </div>
         </div>
@@ -149,11 +150,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>Top Industry</span>
             <BarChart3 className="h-3.5 w-3.5 text-amber-400" />
           </div>
-          <div className="text-base sm:text-lg font-bold text-white truncate" title={ov?.top_industry?.industry}>
-            {ov?.top_industry?.industry ?? dash}
+          <div className="text-base sm:text-lg font-bold text-white truncate" title={topInd?.industry}>
+            {topInd?.industry ?? dash}
           </div>
           <div className="text-[10px] text-amber-400 mt-1 font-mono">
-            {ov?.top_industry ? `${ov.top_industry.unique_discussions.toLocaleString()} unique discussions` : ov ? 'no clusters yet' : 'collection not connected'}
+            {topInd ? `${topInd.unique_discussions.toLocaleString()} unique discussions` : ov ? 'no industry identified yet' : 'collection not connected'}
           </div>
         </div>
 
