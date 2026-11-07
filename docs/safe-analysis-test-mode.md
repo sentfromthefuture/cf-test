@@ -107,10 +107,29 @@ them. The 10 records are the oldest pending ones (`order by collected_at`).
 2. As a signed-in admin, call the function with the admin JWT: `supabase.functions.invoke('collect', { body: { action: 'analysis_test' } })`.
 3. Check `testMode: true`, `claimed <= 10` and `summaries === 0` in the response.
 
-**Do not call `analysis_test` against a deployment that predates this change.** Older versions treat an unknown `action`
-as a normal collection run (real connectors) because the handler falls through to `runCollection`.
+**Do not call `analysis_test` against a deployment that predates this branch** (for example, the current `main`). Those
+versions do not know the action and treat any unknown `action` as a normal collection run (real connectors) because the
+handler falls through to `runCollection`. This branch fixes that for deployments that include it (see below); it cannot
+protect an older deployment that is already live.
 
 ## Tests
 
 `bun run test:collector` (see `analysis-test-mode.test.ts` and `analysis-test-fn.test.ts`). They use in-memory/fake backends
 only; no network and no real Supabase project.
+
+## Accepted requests (strict allowlist)
+
+`collect/index.ts` accepts exactly three kinds of request, checked **after** authentication (so unauthenticated callers learn
+nothing about which actions exist) and **before** any store, connector or database call:
+
+| Request body | Result |
+|---|---|
+| no `action` (absent or `null`), including `{}` and a genuinely empty body | normal collection run (what cron and the manual-sync button send) |
+| `"action": "reanalyse"` | admin-only re-analysis (schedule secret -> 403) |
+| `"action": "analysis_test"` | admin-only guarded smoke test (schedule secret -> 403) |
+| any other `action` (typo, wrong case, stray whitespace, `""`, `0`, `false`, an object, `"constructor"`, ...) | **400** `{"error":"unknown action","supported":[...]}`; nothing is collected or claimed |
+| a non-empty body that is not valid JSON, or is JSON but not an object (e.g. a truncated `{"action":"analysis_test"`, `null`, an array) | **400**; nothing is collected or claimed |
+
+Matching is exact and case-sensitive. The dispatch is an exhaustive `switch` over the allowed actions, so adding a new
+action without handling it is a compile-time error, and the fallback fails closed with a 400 rather than running a collection.
+Tests: `collect-actions.test.ts`.

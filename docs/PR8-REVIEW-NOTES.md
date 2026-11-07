@@ -33,3 +33,17 @@ Implements `docs/safe-analysis-test-mode.md` on this branch. **Code + unit tests
 - Run `bun run test:collector` + `supabase/tests` in CI against a real Postgres.
 - Decide on follow-up #3 (reject unknown actions).
 - Only after explicit approval: deploy this branch's `collect` function, then one admin invocation, and check `testMode:true`, `claimed<=10`, `summaries===0`.
+
+---
+
+## Update: unknown-action fallthrough fixed (follow-up commit on this branch)
+
+Risk #3 above is addressed in `collect/index.ts` (the "Suggested follow-up" is now done on this branch rather than a separate PR):
+
+- **Strict allowlist:** only no-action (absent/`null`), `"reanalyse"` and `"analysis_test"` are accepted. Anything else -> **400**, decided after auth and before any store/connector call. Exact, case-sensitive matching; falsy values (`""`, `0`, `false`) and `Object.prototype` names are rejected.
+- **Exhaustive dispatch:** `switch` over the action union with a `never` check, so a future action cannot silently fall into `runCollection`.
+- **One extension beyond the literal ask (please review; easy to drop):** a non-empty body that fails to parse, or is not a JSON object, now returns 400. Before, e.g. a truncated `{"action":"analysis_test"` was silently treated as `{}` and ran a **real collection**, and a JSON `null` body crashed with a TypeError. A genuinely empty body is still a normal collection run.
+- **Tests:** `collect-actions.test.ts` (50 tests) assert 400 for ~30 unknown actions and 8 unreadable bodies with the *only* outbound call being `dr_is_admin` (admin) or none at all (schedule secret), plus regression tests that every valid request shape behaves as before (including the exact `{}` that pg_cron sends).
+- **Mutation check:** re-introducing the fallthrough, falsy-as-no-action, swallowed bad bodies, and sloppy matching each made tests fail. Mutating only the unreachable `default:` branch does not (equivalent mutant; it is defence in depth).
+- **Not changed (out of scope, FYI):** an invalid `source` string (not matching `^[a-z0-9_]{2,40}$`) is still treated as "no source", i.e. all due sources, rather than a 400.
+- **Still true:** this cannot protect a deployment that is *already live* without the change. Deploy this branch before ever calling `analysis_test`.

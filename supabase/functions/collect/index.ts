@@ -39,6 +39,11 @@ async function isAdminUser(req: Request, supabaseUrl: string, anonKey: string): 
   return res.ok && (await res.json()) === true;
 }
 
+/** The ONLY actions this function understands. Anything else is rejected with 400 before any store or connector is touched.
+ *  (A request with no action at all is the normal collection run used by cron and the manual sync button.) */
+const ACTIONS = ['reanalyse', 'analysis_test'] as const;
+type Action = (typeof ACTIONS)[number];
+
 Deno.serve(async (req) => {
   const cors = corsFor(req);
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'content-type': 'application/json' } });
@@ -55,27 +60,58 @@ Deno.serve(async (req) => {
   else if (await isAdminUser(req, url, env.SUPABASE_ANON_KEY || env.SUPABASE_PUBLISHABLE_KEY || '').catch(() => false)) trigger = 'manual';
   if (!trigger) return json({ error: 'unauthorized' }, 401);
 
+  // Auth is checked first (above), so unauthenticated callers learn nothing about which actions exist.
+  // A genuinely empty body is a normal collection run (cron sends '{}'), but a body that is present and unreadable is rejected:
+  // silently treating a truncated '{"action":"analysis_test"' as '{}' would run a real collection instead of what was asked.
   let body: { source?: unknown; skipAnalysis?: unknown; action?: unknown } = {};
-  try { body = await req.json(); } catch { /* empty body is fine */ }
+  const rawBody = await req.text().catch(() => null);
+  if (rawBody === null) return json({ error: 'invalid request body' }, 400);
+  if (rawBody.trim() !== '') {
+    let parsed: unknown;
+    try { parsed = JSON.parse(rawBody); } catch { return json({ error: 'invalid JSON body' }, 400); }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return json({ error: 'request body must be a JSON object' }, 400);
+    body = parsed as typeof body;
+  }
   const source = typeof body.source === 'string' && /^[a-z0-9_]{2,40}$/.test(body.source) ? body.source : null;
+
+  // Strict allowlist. Only an absent/null action means "normal collection"; any other value - a typo, different casing, stray
+  // whitespace, an empty string, 0/false, an object, 'constructor' - is a 400 and never reaches runCollection or a connector.
+  let action: Action | null = null;
+  if (body.action !== undefined && body.action !== null) {
+    if (typeof body.action !== 'string' || !(ACTIONS as readonly string[]).includes(body.action)) {
+      return json({ error: 'unknown action', supported: ACTIONS }, 400);
+    }
+    action = body.action as Action;
+  }
 
   try {
     const store = new SupabaseStore(url, serviceKey);
-    if (body.action === 'analysis_test') {
-      // Admin JWT only (never the schedule secret). Analysis-only smoke test, hard-capped at 10 pending records, heuristic-only.
-      // Any other body field (source, skipAnalysis, a limit, ...) is deliberately ignored: this branch cannot be steered by the caller.
-      if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
-      return json(await runAnalysisTest({ store, budgetMs: 110_000 }));
+    switch (action) {
+      case 'analysis_test': {
+        // Admin JWT only (never the schedule secret). Analysis-only smoke test, hard-capped at 10 pending records, heuristic-only.
+        // Any other body field (source, skipAnalysis, a limit, ...) is deliberately ignored: this branch cannot be steered by the caller.
+        if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
+        return json(await runAnalysisTest({ store, budgetMs: 110_000 }));
+      }
+      case 'reanalyse': {
+        // Admin only: re-queue keyword-analysed records so they are re-processed (with AI when a key is configured).
+        if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
+        const requeued = await store.requeueHeuristicAnalysis(5000);
+        const report = await runCollection({ env, store, trigger, analysisOnly: true, budgetMs: 110_000 });
+        return json({ ...report, requeued });
+      }
+      case null: {
+        const report = await runCollection({ env, store, trigger, source, skipAnalysis: body.skipAnalysis === true, budgetMs: 110_000 });
+        return json(report);
+      }
+      default: {
+        // Compile-time guarantee: adding an action to ACTIONS without handling it here is a type error, and at runtime this
+        // fails closed rather than falling through to a collection run.
+        const unhandled: never = action;
+        void unhandled;
+        return json({ error: 'unknown action', supported: ACTIONS }, 400);
+      }
     }
-    if (body.action === 'reanalyse') {
-      // Admin only: re-queue keyword-analysed records so they are re-processed (with AI when a key is configured).
-      if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
-      const requeued = await store.requeueHeuristicAnalysis(5000);
-      const report = await runCollection({ env, store, trigger, analysisOnly: true, budgetMs: 110_000 });
-      return json({ ...report, requeued });
-    }
-    const report = await runCollection({ env, store, trigger, source, skipAnalysis: body.skipAnalysis === true, budgetMs: 110_000 });
-    return json(report);
   } catch (e) {
     console.error('collection failed', (e as Error).message);
     return json({ error: 'collection failed', detail: (e as Error).message.slice(0, 200) }, 500);
