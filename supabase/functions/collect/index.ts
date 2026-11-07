@@ -5,7 +5,7 @@
 // Secrets live only in Edge Function environment variables:
 //   SUPABASE_URL, SUPABASE_SERVICE_KEY (or the auto-provided SUPABASE_SERVICE_ROLE_KEY), COLLECTOR_SECRET,
 //   optional: GITHUB_TOKEN, STACKEXCHANGE_KEY, GEMINI_API_KEY (+ GEMINI_MODEL, GEMINI_EMBEDDING_MODEL), AUTHOR_HASH_SALT.
-import { runCollection, SupabaseStore } from '../_shared/collector/index.ts';
+import { runAnalysisTest, runCollection, SupabaseStore } from '../_shared/collector/index.ts';
 
 declare const Deno: { env: { toObject(): Record<string, string> }; serve(h: (req: Request) => Response | Promise<Response>): void };
 
@@ -61,6 +61,12 @@ Deno.serve(async (req) => {
 
   try {
     const store = new SupabaseStore(url, serviceKey);
+    if (body.action === 'analysis_test') {
+      // Admin JWT only (never the schedule secret). Analysis-only smoke test, hard-capped at 10 pending records, heuristic-only.
+      // Any other body field (source, skipAnalysis, a limit, ...) is deliberately ignored: this branch cannot be steered by the caller.
+      if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
+      return json(await runAnalysisTest({ store, budgetMs: 110_000 }));
+    }
     if (body.action === 'reanalyse') {
       // Admin only: re-queue keyword-analysed records so they are re-processed (with AI when a key is configured).
       if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);

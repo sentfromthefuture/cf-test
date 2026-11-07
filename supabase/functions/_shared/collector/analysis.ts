@@ -3,7 +3,12 @@ import { Logger } from './types.ts';
 import { safeError } from './util.ts';
 import { Store } from './store.ts';
 
+/** Hard ceiling for the admin-only `analysis_test` smoke test. Not configurable by callers or environment. */
+export const ANALYSIS_TEST_MAX_RECORDS = 10;
+
 export interface AnalysisStats {
+  /** Present (true) only for the guarded analysis-only test path. */
+  testMode?: true;
   ran: boolean;
   method: 'llm' | 'heuristic' | 'none';
   claimed: number;
@@ -26,6 +31,13 @@ export interface AnalysisDeps {
   timeLeftMs: () => number;
   clusterThreshold?: number;
   trgmThreshold?: number;
+  /**
+   * Guarded smoke-test mode (see docs/safe-analysis-test-mode.md). When true, runAnalysis itself enforces - regardless of
+   * any other dependency passed in - that it: claims at most ANALYSIS_TEST_MAX_RECORDS pending records in a single pass,
+   * is heuristic-only (gemini/openrouter are ignored, so no external LLM call is possible), never generates cluster
+   * summaries, and never runs cluster assignment/refresh (those RPCs are global, not scoped to the test batch).
+   */
+  testMode?: boolean;
 }
 
 /**
@@ -34,8 +46,12 @@ export interface AnalysisDeps {
  * Guarded by a DB lock so overlapping invocations never analyse the same records twice, and records whose
  * content has not changed are never re-queued (see dr_upsert_records), so unchanged data costs no AI calls.
  */
-export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
-  const stats: AnalysisStats = { ran: false, method: d.gemini ? 'llm' : 'heuristic', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0 };
+export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
+  const testMode = input.testMode === true;
+  // In test mode the AI clients are dropped here, before anything can use them, so no code path below can reach Gemini/OpenRouter.
+  const d: AnalysisDeps = testMode ? { ...input, gemini: null, openrouter: null } : input;
+  let remaining = testMode ? ANALYSIS_TEST_MAX_RECORDS : Infinity;
+  const stats: AnalysisStats = { ...(testMode ? { testMode: true as const } : {}), ran: false, method: d.gemini ? 'llm' : 'heuristic', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0 };
   if (!(await d.store.acquireLock('analysis', 180))) {
     stats.note = 'another analysis pass is still running or was interrupted (its lock frees itself within 3 minutes)';
     return stats;
@@ -45,8 +61,13 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
     const llmBatch = 12;
     // Each AI batch can take up to ~35s (call + one retry), so only start one if there is clearly time to finish it.
     while (d.timeLeftMs() > (d.gemini ? 45_000 : 25_000)) {
-      const pending = await d.store.claimPending(d.gemini ? 36 : 100);
+      // dr_claim_pending_records treats a limit below 1 as 1, so never ask when nothing is left of the test cap.
+      if (testMode && remaining <= 0) break;
+      // Test mode: ask for no more than what is left of the cap AND truncate the reply, so a store that over-returns cannot exceed it.
+      const want = testMode ? remaining : d.gemini ? 36 : 100;
+      const pending = testMode ? (await d.store.claimPending(want)).slice(0, remaining) : await d.store.claimPending(want);
       if (pending.length === 0) break;
+      if (testMode) remaining -= pending.length;
       stats.claimed += pending.length;
       const skip = pending.filter((r) => !worthAnalysing(r));
       const todo = pending.filter((r) => worthAnalysing(r));
@@ -99,20 +120,22 @@ export async function runAnalysis(d: AnalysisDeps): Promise<AnalysisStats> {
       stats.problems += signals.filter((s) => s.is_problem).length;
       if (llmDown) break; // do not hammer a failing model
       if (stats.failed > 0 && stats.analysed === 0) break;
+      if (testMode) break; // exactly one bounded pass: never re-claim, so records that stay pending cannot be counted twice
     }
 
-    for (let i = 0; i < 20 && d.timeLeftMs() > 15_000; i++) {
+    // Cluster assignment/refresh operate on ALL unclustered signals / dirty clusters, not just this batch, so test mode skips them.
+    for (let i = 0; !testMode && i < 20 && d.timeLeftMs() > 15_000; i++) {
       const n = await d.store.assignPendingClusters(500, d.clusterThreshold ?? 0.8, d.trgmThreshold ?? 0.5);
       stats.clustered += n;
       if (n < 500) break;
     }
-    for (let i = 0; i < 20 && d.timeLeftMs() > 8_000; i++) {
+    for (let i = 0; !testMode && i < 20 && d.timeLeftMs() > 8_000; i++) {
       const n = await d.store.refreshClusters(200);
       stats.clustersRefreshed += n;
       if (n < 200) break;
     }
 
-    if ((d.openrouter || d.gemini) && d.timeLeftMs() > 20_000) {
+    if (!testMode && (d.openrouter || d.gemini) && d.timeLeftMs() > 20_000) {
       const need = await d.store.clustersNeedingSummary(d.openrouter ? Math.max(1, Math.min(5, d.maxOpenRouterSummaries ?? 2)) : 2);
       for (const c of need) {
         if (d.timeLeftMs() < 12_000) break;

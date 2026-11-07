@@ -1,4 +1,4 @@
-import { runAnalysis, AnalysisStats } from './analysis.ts';
+import { ANALYSIS_TEST_MAX_RECORDS, runAnalysis, AnalysisStats } from './analysis.ts';
 import { geminiConfigFromEnv, openRouterConfigFromEnv } from './ai.ts';
 import { connectors as defaultConnectors } from './connectors/index.ts';
 import { createHttpClient } from './http.ts';
@@ -70,6 +70,53 @@ export async function runCollection(o: RunOptions): Promise<RunReport> {
     }
   }
   return { trigger: o.trigger, claimed: claimed.map((c) => c.id), sources, analysis, elapsedMs: now().getTime() - startedAt };
+}
+
+export interface AnalysisTestOptions {
+  store: Store;
+  /** Wall-clock budget for the invocation. */
+  budgetMs?: number;
+  now?: () => Date;
+  log?: Logger;
+}
+
+export interface AnalysisTestReport {
+  testMode: true;
+  action: 'analysis_test';
+  maxRecords: number;
+  method: AnalysisStats['method'];
+  ran: boolean;
+  claimed: number;
+  analysed: number;
+  skipped: number;
+  problems: number;
+  failed: number;
+  /** Always 0: cluster assignment/refresh are global operations, so they are not run in test mode. */
+  clustered: number;
+  clustersRefreshed: number;
+  /** Always 0: no summaries are generated in test mode. */
+  summaries: number;
+  elapsedMs: number;
+  note?: string;
+}
+
+/**
+ * Guarded, analysis-only smoke test (docs/safe-analysis-test-mode.md): analyses at most ANALYSIS_TEST_MAX_RECORDS pending
+ * records with the keyword heuristic. It deliberately takes no `env`, `connectors` or `fetchImpl`, never touches the source
+ * queue (claimDueSources / upsertRecords / requeueHeuristicAnalysis), and cannot reach Gemini or OpenRouter - so none of that
+ * can be switched on by configuration. Do NOT reuse runCollection({ analysisOnly }) for this: it has no record cap.
+ */
+export async function runAnalysisTest(o: AnalysisTestOptions): Promise<AnalysisTestReport> {
+  const now = o.now ?? (() => new Date());
+  const startedAt = now().getTime();
+  const budgetMs = o.budgetMs ?? 100_000;
+  const a = await runAnalysis({ store: o.store, gemini: null, openrouter: null, log: o.log ?? consoleLogger, timeLeftMs: () => budgetMs - (now().getTime() - startedAt), testMode: true });
+  return {
+    testMode: true, action: 'analysis_test', maxRecords: ANALYSIS_TEST_MAX_RECORDS, method: a.method, ran: a.ran,
+    claimed: a.claimed, analysed: a.analysed, skipped: a.skipped, problems: a.problems, failed: a.failed,
+    clustered: a.clustered, clustersRefreshed: a.clustersRefreshed, summaries: a.summaries,
+    elapsedMs: now().getTime() - startedAt, ...(a.note ? { note: a.note } : {}),
+  };
 }
 
 const emptyStats = (): RunStats => ({ requests: 0, fetched: 0, inserted: 0, updated: 0, duplicates: 0, errors: 0 });

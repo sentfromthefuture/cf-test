@@ -53,3 +53,64 @@ Be careful with clustering: if clustering/refresh mutates many unrelated product
 ## Acceptance criteria
 
 A reviewer can establish from code and tests that the action is admin-only, analysis-only, hard-capped at 10 records, heuristic-only, summary-free, and cannot trigger source collection or reanalysis/requeue. No production deployment or data mutation is performed by this task.
+
+---
+
+# Developer reference: the `analysis_test` action (as implemented)
+
+> **Status:** code and unit tests only. It has **not** been deployed or invoked against any Supabase project. Do not run it
+> until a controlled test has been explicitly approved (see "Invoking it" below).
+
+## What it does
+
+`POST /functions/v1/collect` with body `{"action":"analysis_test"}` analyses **at most 10** pending raw records using the
+keyword heuristic and returns metrics. Entry points: `collect/index.ts` (auth + routing) -> `runAnalysisTest` in
+`_shared/collector/runner.ts` -> `runAnalysis({ testMode: true })` in `_shared/collector/analysis.ts`.
+
+## Guardrails and where each one is enforced
+
+| Guarantee | Enforced by |
+|---|---|
+| Admin JWT only; schedule secret gets **403** | `collect/index.ts`: `trigger !== 'manual'` check. `trigger` comes only from the secret header or the server-side `dr_is_admin` RPC; no body field is read for auth. |
+| Request body cannot steer it | The branch ignores `source`, `skipAnalysis` and any limit-like field; there is no limit parameter at all. |
+| Never touches sources / connectors / requeue | `runAnalysisTest` takes no `env`, `connectors` or `fetchImpl` and never calls `claimDueSources`, `upsertRecords`, `requeueHeuristicAnalysis`, etc. It does **not** go through `runCollection`. |
+| Hard cap of 10 records | Inside the analysis loop: `ANALYSIS_TEST_MAX_RECORDS`; the claim asks for `<= 10`, the reply is truncated to the remaining budget (so an over-returning store cannot exceed it), and test mode makes exactly one pass. |
+| Heuristic-only, no Gemini/OpenRouter | `runAnalysis` discards `gemini`/`openrouter` at the top when `testMode` is set, so environment keys cannot enable them. |
+| No cluster summaries | Summary step is skipped in test mode (and is unreachable anyway because the AI clients are discarded). |
+| No global clustering | `dr_assign_pending_clusters` and `dr_refresh_clusters` act on **all** unclustered signals / dirty clusters, not just the test batch, so test mode skips both and reports `0`. |
+| Does not requeue failed/skipped/done records | Only `claimPending` rows (status `pending`) are read; nothing resets other rows. |
+| Normal collection and `reanalyse` unchanged | Separate code path; regression tests cover both. |
+
+## Response
+
+```json
+{
+  "testMode": true, "action": "analysis_test", "maxRecords": 10, "method": "heuristic", "ran": true,
+  "claimed": 10, "analysed": 9, "skipped": 1, "problems": 7, "failed": 0,
+  "clustered": 0, "clustersRefreshed": 0, "summaries": 0, "elapsedMs": 412
+}
+```
+
+`clustered`, `clustersRefreshed` and `summaries` are always `0` by design. An optional `note` appears if another analysis
+pass holds the lock (`ran: false`).
+
+## What it still writes (be aware)
+
+It is a bounded **write** to the database, not a dry run. For each analysed record it saves a heuristic row in
+`dr_problem_signals` and flips that raw record to `analysis_status = 'done'`; skipped records are marked `skipped`. It also
+takes and releases the `analysis` lock. Signals it creates have no cluster, so the next normal analysis run will cluster
+them. The 10 records are the oldest pending ones (`order by collected_at`).
+
+## Invoking it (only after explicit approval of a controlled test)
+
+1. Deploy this branch's `collect` function to the target project (never as a side effect of merging without sign-off).
+2. As a signed-in admin, call the function with the admin JWT: `supabase.functions.invoke('collect', { body: { action: 'analysis_test' } })`.
+3. Check `testMode: true`, `claimed <= 10` and `summaries === 0` in the response.
+
+**Do not call `analysis_test` against a deployment that predates this change.** Older versions treat an unknown `action`
+as a normal collection run (real connectors) because the handler falls through to `runCollection`.
+
+## Tests
+
+`bun run test:collector` (see `analysis-test-mode.test.ts` and `analysis-test-fn.test.ts`). They use in-memory/fake backends
+only; no network and no real Supabase project.
