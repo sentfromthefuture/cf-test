@@ -47,3 +47,20 @@ Risk #3 above is addressed in `collect/index.ts` (the "Suggested follow-up" is n
 - **Mutation check:** re-introducing the fallthrough, falsy-as-no-action, swallowed bad bodies, and sloppy matching each made tests fail. Mutating only the unreachable `default:` branch does not (equivalent mutant; it is defence in depth).
 - **Not changed (out of scope, FYI):** an invalid `source` string (not matching `^[a-z0-9_]{2,40}$`) is still treated as "no source", i.e. all due sources, rather than a 400.
 - **Still true:** this cannot protect a deployment that is *already live* without the change. Deploy this branch before ever calling `analysis_test`.
+
+---
+
+## Update 2: `dr_claim_pending_records` verified against the real SQL
+
+Question: can `claimPending(10)` cause the database to mark more than 10 records as claimed/processing, and can the test strand records?
+
+**Answer: no and no, and no migration is needed.** `dr_claim_pending_records` (single definition, never overridden) is a read-only
+`SELECT ... limit least(greatest(p_limit,1),200)`: it marks **0** rows, takes no row locks, and no `processing`/`claimed` status exists
+(`CHECK` allows only pending/done/skipped/failed). See "Queue semantics and interruption" in `safe-analysis-test-mode.md` for the full table.
+
+- **Proof, SQL:** new `supabase/tests/20_claim_pending.test.sql`, run on a throwaway local Postgres 16 + pgvector (repo stub + migrations 1-4; 5-6 need Supabase `auth.users`/billing tables and don't touch the queue). Passes; and it **fails** when I mutate the real function in a scratch DB copy to (a) raise the ceiling to 500, (b) UPDATE/over-claim 3x the limit, (c) add `FOR UPDATE SKIP LOCKED` (each caught behaviourally).
+- **Proof, live concurrency:** with session A holding an open transaction right after `claim(10)`, session B could `SELECT ... FOR UPDATE NOWAIT` the same 10 rows instantly; A held only `AccessShareLock`; both sessions received identical rows (so it is a peek, not a reservation).
+- **Stranding after interruption:** a backend hard-killed after taking the lock and reading 10 rows left all 25 records `pending`, 0 attempts, 0 signals; only the `analysis` lock row remained (~177 of 180 s), and it expires on its own (also shown with a 2 s TTL). `markFailed` is unreachable in test mode, so attempts can't be burned. Worst real-world effect: analysis paused up to 3 min.
+- **TypeScript test improved:** the old "store returns extra rows" test is replaced by `analysis-test-claim-model.test.ts`, which models the real SQL (clamp, read-only) and a *hypothetical claiming DB*, snapshots storage before/after, and asserts <=10 mutated rows. A canary test shows an over-claiming DB cannot be contained by app code and that the mutation budget check flags it. Interrupted and hard-killed passes are modelled too (lock released in `finally`; TTL pinned at 180 s). 5 app-level mutations all fail the new tests.
+- **Honest caveats:** (1) the SQL tests are **not run in CI** (no workflow starts Postgres); I did not add a workflow. Suggested follow-up: a CI job with a `pgvector/pgvector` service running `00_stub_supabase.sql`, the migrations, and `supabase/tests/*.test.sql`. (2) I proved behaviour on stock PostgreSQL 16 / pgvector 0.6.0, not on a real Supabase project, which I was told not to contact; Supabase's managed Postgres runs the same engine, but role/RLS behaviour (`security definer`, `service_role`) is not exercised here. (3) `claimed` in the metrics means "rows read from the queue", not "rows reserved".
+

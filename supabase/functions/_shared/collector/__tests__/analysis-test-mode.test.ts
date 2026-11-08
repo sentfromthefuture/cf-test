@@ -50,18 +50,8 @@ test('hard cap: with 25 pending, exactly 10 are claimed and processed; the other
   assert.equal(store.signals.size, 10);
 });
 
-test('cap is enforced inside the analysis loop: a store that ignores the requested limit still cannot exceed 10', async () => {
-  class OverClaimingStore extends MemoryStore {
-    asked: number[] = [];
-    async claimPending(limit: number) { this.asked.push(limit); return super.claimPending(1000); } // ignores `limit` like a buggy backend
-  }
-  const store = new OverClaimingStore();
-  await store.upsertRecords(Array.from({ length: 40 }, (_, i) => worth(`o${i}`)));
-  const rep = await runAnalysisTest({ store, log: silentLog });
-  assert.equal(rep.claimed, 10);
-  assert.deepEqual(statusCounts(store), { done: 10, pending: 30 });
-  assert.ok(store.asked.length === 1 && store.asked[0] <= 10, `asked for ${store.asked}`); // one bounded claim, never re-claims
-});
+// The "store returns more rows than asked for" case now lives in analysis-test-claim-model.test.ts, which models what the database
+// actually does (read-only SELECT vs. a claiming UPDATE) and counts mutated rows, instead of only returning extra rows from a stub.
 
 test('cap holds when a pass cannot finish its records: records that stay pending are not re-claimed in a loop', async () => {
   const store = await seeded(25);

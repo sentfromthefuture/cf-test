@@ -133,3 +133,36 @@ nothing about which actions exist) and **before** any store, connector or databa
 Matching is exact and case-sensitive. The dispatch is an exhaustive `switch` over the allowed actions, so adding a new
 action without handling it is a compile-time error, and the fallback fails closed with a 400 rather than running a collection.
 Tests: `collect-actions.test.ts`.
+
+## Queue semantics and interruption (verified against the real SQL)
+
+`claimPending(n)` maps to `dr_claim_pending_records(n)`, which is defined once (migration `20261104000100`) and never replaced.
+Despite its name it is a **read-only `SELECT`**: it does not claim, mark or lock anything.
+
+| Property | Fact |
+|---|---|
+| Limit | `least(greatest(p_limit, 1), 200)`: minimum **1** (so `0`, negatives and `NULL` return 1 row), maximum **200**, default 20 |
+| Marks rows before returning? | **No.** No `UPDATE`, no `FOR UPDATE`/`SKIP LOCKED`, no triggers. The only lock a call takes is `AccessShareLock` |
+| Can it mutate more than 10 rows for `claimPending(10)`? | **No, it mutates 0.** It returns at most 10. Mutations come only from `dr_mark_skipped` / `dr_save_signals` on rows the app then processes (<= 10) |
+| Is there a "processing" state to be stranded in? | **No.** `analysis_status` has a `CHECK` allowing only `pending, done, skipped, failed` |
+| Exclusive between concurrent callers? | **No.** Two sessions get the *same* rows; mutual exclusion comes from the `analysis` job lock (`dr_acquire_lock`) |
+| `dr_save_signals` atomicity | One PL/pgSQL call = one transaction: signal insert + `done` flip commit or roll back together |
+
+**Interrupted invocation.** Nothing is left in limbo. At worst, some records are already `skipped`/`done` (each committed by its own call)
+and the rest are still `pending`. `analysis_attempts` never moves, because `markFailed` is only reachable in the LLM branch and test mode
+has no LLM client. The `analysis` lock is released in a `finally`; if the process is killed before that, the lock row expires by itself
+after its **180 s** TTL. Until then any analysis pass (including the scheduled one) is refused with a note saying so, so the cost of a crash
+is up to 3 minutes of paused analysis, not stranded data.
+
+**How this was verified.** On a throwaway local PostgreSQL 16 + pgvector (not Supabase), with the repo's stub and migrations 1-4 applied
+(migrations 5-6 need Supabase's `auth.users` and the main app's billing tables, and never reference the record queue):
+`supabase/tests/10_market_intel.test.sql` and the new `supabase/tests/20_claim_pending.test.sql` pass, the latter proving the limit
+clamp, zero inserts/updates/deletes and zero row-version/lock changes across 60 calls, status-domain, atomic rollback, and lock
+self-expiry. Two live sessions confirmed no row locks and identical results; a backend killed mid-pass left all 25 records `pending`
+with the lock expiring on its own. The SQL tests are **not run by CI** (see the review notes), so run them locally after touching the queue.
+The TypeScript side is covered by `analysis-test-claim-model.test.ts`, which models both the real SQL and a hypothetical claiming
+database and counts mutated rows.
+
+If a future migration turns `dr_claim_pending_records` into a real claim (an `UPDATE`), `20_claim_pending.test.sql` fails by design:
+at that point the DB, not the app, would own the cap, and the cap, the `analysis_test` docs and the stranding story must be revisited.
+
