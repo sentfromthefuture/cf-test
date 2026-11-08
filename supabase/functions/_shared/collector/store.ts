@@ -38,6 +38,12 @@ export interface Store {
   upsertRecords(records: RawRecordInput[]): Promise<UpsertResult>;
   acquireLock(name: string, seconds: number): Promise<boolean>;
   releaseLock(name: string): Promise<void>;
+  /**
+   * Despite the name this does NOT claim anything: dr_claim_pending_records is a read-only SELECT (no UPDATE, no row locks, no
+   * 'processing' status exists). It returns the oldest pending rows, clamped to least(greatest(limit, 1), 200); a limit below 1 yields 1.
+   * Two concurrent callers receive the same rows, so overlap is prevented only by the 'analysis' job lock. Rows change state solely via
+   * markSkipped / saveSignals / markFailed. Proof: supabase/tests/20_claim_pending.test.sql.
+   */
   claimPending(limit: number): Promise<PendingRecord[]>;
   markSkipped(ids: string[]): Promise<void>;
   markFailed(ids: string[]): Promise<void>;
