@@ -5,6 +5,8 @@
 // Secrets live only in Edge Function environment variables:
 //   SUPABASE_URL, SUPABASE_SERVICE_KEY (or the auto-provided SUPABASE_SERVICE_ROLE_KEY), COLLECTOR_SECRET,
 //   optional: GITHUB_TOKEN, STACKEXCHANGE_KEY, GEMINI_API_KEY (+ GEMINI_MODEL, GEMINI_EMBEDDING_MODEL), AUTHOR_HASH_SALT.
+//   optional AI engines (both OFF by default, free models only; see docs/AI_ARCHITECTURE.md): OPENROUTER_API_KEY, DECISIONS_ENABLED (+ DECISIONS_MODEL, DECISIONS_MAX_PER_RUN,
+//   DECISIONS_MIN_PROBLEM_PROBABILITY, DECISIONS_MIN_INTERVAL_MS), OPENROUTER_ENABLED (+ OPENROUTER_MODEL, OPENROUTER_MAX_SUMMARIES_PER_RUN), AI_CACHE_VERSION.
 import { runAnalysisTest, runCollection, SupabaseStore } from '../_shared/collector/index.ts';
 
 declare const Deno: { env: { toObject(): Record<string, string> }; serve(h: (req: Request) => Response | Promise<Response>): void };

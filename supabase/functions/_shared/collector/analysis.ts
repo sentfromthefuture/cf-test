@@ -1,4 +1,8 @@
-import { embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, OpenRouterConfig, PendingRecord, SignalOutput, summariseCluster, summariseClusterOpenRouter, worthAnalysing } from './ai.ts';
+import { ClusterSummary, embedTexts, GeminiConfig, heuristicAnalyse, llmAnalyse, OpenRouterConfig, PendingRecord, SignalOutput, summariseCluster, worthAnalysing } from './ai.ts';
+import { AiTask, AiUsageCounters, classifyAiFailure, emptyAiUsage, hasAiUsage } from './ai-common.ts';
+import { DecisionsConfig, SignalAiRow } from './decisions.ts';
+import { classifyWithDecisions, DecisionsBatchResult, newDecisionsRunState } from './decisions-runner.ts';
+import { summariseClusterCached } from './summaries.ts';
 import { Logger } from './types.ts';
 import { safeError } from './util.ts';
 import { Store } from './store.ts';
@@ -20,13 +24,20 @@ export interface AnalysisStats {
   clustersRefreshed: number;
   summaries: number;
   note?: string;
+  /** Present only when the Decisions engine is configured. Counts live requests vs cache hits so repeated work is visible. */
+  decisions?: { liveCalls: number; cacheHits: number; busy: number; cooldown: number; invalid: number; deferred: number; stopped: string | null };
+  /** Present only when the optional LFM3 summary engine is configured. A failure here never affects core analysis. */
+  summaryAi?: { liveCalls: number; cacheHits: number; failures: number; stopped: string | null };
 }
 
 export interface AnalysisDeps {
   store: Store;
   gemini: GeminiConfig | null;
+  /** Engine B (LFM3): optional cluster summaries only. */
   openrouter?: OpenRouterConfig | null;
   maxOpenRouterSummaries?: number;
+  /** Engine A (Decisions Fast): optional record classification. null/undefined = disabled (the default). */
+  decisions?: DecisionsConfig | null;
   log: Logger;
   timeLeftMs: () => number;
   clusterThreshold?: number;
@@ -34,7 +45,7 @@ export interface AnalysisDeps {
   /**
    * Guarded smoke-test mode (see docs/safe-analysis-test-mode.md). When true, runAnalysis itself enforces - regardless of
    * any other dependency passed in - that it: claims at most ANALYSIS_TEST_MAX_RECORDS pending records in a single pass,
-   * is heuristic-only (gemini/openrouter are ignored, so no external LLM call is possible), never generates cluster
+   * is heuristic-only (gemini/openrouter/decisions are ignored, so no external LLM call is possible), never generates cluster
    * summaries, and never runs cluster assignment/refresh (those RPCs are global, not scoped to the test batch).
    */
   testMode?: boolean;
@@ -48,23 +59,27 @@ export interface AnalysisDeps {
  */
 export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
   const testMode = input.testMode === true;
-  // In test mode the AI clients are dropped here, before anything can use them, so no code path below can reach Gemini/OpenRouter.
-  const d: AnalysisDeps = testMode ? { ...input, gemini: null, openrouter: null } : input;
+  // In test mode the AI clients are dropped here, before anything can use them, so no code path below can reach Gemini/OpenRouter/Decisions.
+  const d: AnalysisDeps = testMode ? { ...input, gemini: null, openrouter: null, decisions: null } : input;
   let remaining = testMode ? ANALYSIS_TEST_MAX_RECORDS : Infinity;
-  const stats: AnalysisStats = { ...(testMode ? { testMode: true as const } : {}), ran: false, method: d.gemini ? 'llm' : 'heuristic', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0 };
+  const stats: AnalysisStats = { ...(testMode ? { testMode: true as const } : {}), ran: false, method: d.gemini || d.decisions ? 'llm' : 'heuristic', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0 };
   if (!(await d.store.acquireLock('analysis', 180))) {
     stats.note = 'another analysis pass is still running or was interrupted (its lock frees itself within 3 minutes)';
     return stats;
   }
   stats.ran = true;
+  const decisionsRun = newDecisionsRunState();
+  const summaryUsage: AiUsageCounters = emptyAiUsage();
+  let summaryFailures = 0;
+  let summaryStopped: string | null = null;
   try {
     const llmBatch = 12;
     // Each AI batch can take up to ~35s (call + one retry), so only start one if there is clearly time to finish it.
-    while (d.timeLeftMs() > (d.gemini ? 45_000 : 25_000)) {
+    while (d.timeLeftMs() > (d.gemini || d.decisions ? 45_000 : 25_000)) {
       // dr_claim_pending_records treats a limit below 1 as 1, so never ask when nothing is left of the test cap.
       if (testMode && remaining <= 0) break;
       // Test mode: ask for no more than what is left of the cap AND truncate the reply, so a store that over-returns cannot exceed it.
-      const want = testMode ? remaining : d.gemini ? 36 : 100;
+      const want = testMode ? remaining : d.decisions ? Math.max(1, Math.min(24, d.decisions.maxLivePerRun)) : d.gemini ? 36 : 100;
       const pending = testMode ? (await d.store.claimPending(want)).slice(0, remaining) : await d.store.claimPending(want);
       if (pending.length === 0) break;
       if (testMode) remaining -= pending.length;
@@ -74,9 +89,21 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
       await d.store.markSkipped(skip.map((r) => r.id));
       stats.skipped += skip.length;
 
-      const signals: SignalOutput[] = [];
+      let signals: SignalOutput[] = [];
+      const aiRows: SignalAiRow[] = [];
       let llmDown = false;
-      if (!d.gemini) {
+      let decisionsOut: DecisionsBatchResult | null = null;
+      if (d.decisions) {
+        // Engine A. Cache first, bounded live requests, stops for the run on a service-level failure and leaves records pending.
+        // No other model is ever tried in its place.
+        decisionsOut = await classifyWithDecisions({ cfg: d.decisions, store: d.store, records: todo, state: decisionsRun, log: d.log, timeLeftMs: d.timeLeftMs });
+        signals.push(...decisionsOut.signals);
+        aiRows.push(...decisionsOut.aiRows);
+        if (decisionsOut.failedIds.length) {
+          await d.store.markFailed(decisionsOut.failedIds);
+          stats.failed += decisionsOut.failedIds.length;
+        }
+      } else if (!d.gemini) {
         signals.push(...todo.map(heuristicAnalyse));
       } else {
         // Up to 3 AI calls in flight at once (calls are also paced by the HTTP client). A systemic error stops the whole run.
@@ -104,7 +131,9 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
             }
           }
         }
-        // embeddings only for genuine problems
+      }
+      // Embeddings (Gemini, unchanged) only for genuine problems, whichever engine classified them. Without Gemini, clustering falls back to lexical similarity.
+      if (d.gemini) {
         const probs = signals.filter((s) => s.is_problem && s.problem_statement);
         if (probs.length) {
           try {
@@ -116,9 +145,26 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
           }
         }
       }
+      // The model's own numbers are stored FIRST and apart from the demand data. If that write fails, these records stay pending (their
+      // answers are cached, so the retry costs nothing) instead of being marked done without their provenance.
+      let aiPersistFailed = false;
+      if (aiRows.length) {
+        try {
+          await d.store.saveSignalAi(aiRows);
+        } catch (e) {
+          aiPersistFailed = true;
+          const held = new Set(aiRows.map((r) => r.record_id));
+          signals = signals.filter((s) => !held.has(s.record_id));
+          d.log.warn('saving AI outputs failed - affected records stay pending', { error: safeError(e) });
+          stats.note = `AI output storage error: ${safeError(e)}`;
+        }
+      }
       stats.analysed += await d.store.saveSignals(signals);
       stats.problems += signals.filter((s) => s.is_problem).length;
-      if (llmDown) break; // do not hammer a failing model
+      if (llmDown || aiPersistFailed) break; // do not hammer a failing model
+      // Records the Decisions engine deliberately left pending (budget, outage, another worker, cooling down) are claimed first again.
+      // Stop when the engine was switched off for this run, or when this batch made no progress at all; otherwise keep draining newer records.
+      if (decisionsOut && decisionsOut.leftPending > 0 && (decisionsRun.stopped || decisionsOut.signals.length + decisionsOut.failedIds.length + skip.length === 0)) break;
       if (stats.failed > 0 && stats.analysed === 0) break;
       if (testMode) break; // exactly one bounded pass: never re-claim, so records that stay pending cannot be counted twice
     }
@@ -140,22 +186,50 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
       for (const c of need) {
         if (d.timeLeftMs() < 12_000) break;
         try {
-          // Prefer OpenRouter for durable opportunity summaries; retain Gemini as a fallback when OpenRouter is not configured.
-          const summary = d.openrouter
-            ? await summariseClusterOpenRouter(d.openrouter, c.statements)
-            : d.gemini ? await summariseCluster(d.gemini, c.statements) : null;
+          let summary: ClusterSummary | null = null;
+          if (d.openrouter) {
+            // Engine B: cached, free-model-only, optional. A hit costs no request; a busy/cooling-down cluster is simply skipped.
+            const out = await summariseClusterCached(d.openrouter, d.store, c.statements, { usage: summaryUsage, log: d.log });
+            if (out.status === 'hit' || out.status === 'computed') summary = out.value;
+          } else if (d.gemini) {
+            summary = await summariseCluster(d.gemini, c.statements); // existing behaviour when OpenRouter is not configured
+          }
           if (summary) {
             await d.store.saveClusterSummary(c.id, summary);
             stats.summaries++;
           }
         } catch (e) {
+          // Summaries are optional: whatever goes wrong here, the core analysis above has already been saved and carries on.
           d.log.warn('cluster summary failed', { error: safeError(e) });
+          summaryFailures++;
+          if (d.openrouter && classifyAiFailure(e).systemic) {
+            summaryStopped = classifyAiFailure(e).kind; // rate limit / outage / bad key: stop asking this run, no retry loop
+            break;
+          }
         }
       }
       if (stats.summaries) stats.clustersRefreshed += await d.store.refreshClusters(50);
     }
   } finally {
+    if (d.decisions) {
+      stats.decisions = { liveCalls: decisionsRun.liveCalls, cacheHits: decisionsRun.cacheHits, busy: decisionsRun.busy, cooldown: decisionsRun.cooldown, invalid: decisionsRun.invalid, deferred: decisionsRun.deferred, stopped: decisionsRun.stopped };
+      if (decisionsRun.stopped && !/^(per-run request limit|not enough time)/.test(decisionsRun.stopped)) stats.note = `Decisions engine stopped: ${decisionsRun.stopped}`;
+    }
+    if (d.openrouter) stats.summaryAi = { liveCalls: summaryUsage.calls, cacheHits: summaryUsage.cache_hits, failures: summaryFailures, stopped: summaryStopped };
+    await flushAiUsage(d, [['decisions', decisionsRun.usage], ['summary', summaryUsage]]);
     await d.store.releaseLock('analysis').catch(() => undefined);
   }
   return stats;
+}
+
+/** Best-effort telemetry: a failure to record usage must never affect analysis. */
+async function flushAiUsage(d: AnalysisDeps, entries: Array<[AiTask, AiUsageCounters]>): Promise<void> {
+  for (const [engine, usage] of entries) {
+    if (!hasAiUsage(usage)) continue;
+    try {
+      await d.store.aiNoteUsage(engine, usage);
+    } catch (e) {
+      d.log.warn('AI usage telemetry failed', { engine, error: safeError(e) });
+    }
+  }
 }

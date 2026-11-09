@@ -1,3 +1,4 @@
+import { AiCallError, aiErrorFromBody, classifyAiFailure, isFreeModelSlug } from './ai-common.ts';
 import { cleanStatement, classifySignalType, groundedCompetitors, guessIndustry, hasWtpPattern, INDUSTRIES, problemSignalScore, quoteIsGrounded } from './heuristics.ts';
 import { HttpClient } from './types.ts';
 
@@ -31,7 +32,7 @@ export interface SignalOutput {
   embedding?: number[] | null;
 }
 
-const SIGNAL_TYPES = ['complaint', 'feature_request', 'unmet_need', 'question', 'other'] as const;
+export const SIGNAL_TYPES = ['complaint', 'feature_request', 'unmet_need', 'question', 'other'] as const;
 const recText = (r: PendingRecord) => `${r.title ?? ''}\n${r.excerpt ?? ''}`.trim();
 
 /** Cheap gate in front of the LLM: obvious non-problems are marked "skipped" and never cost tokens. */
@@ -45,7 +46,7 @@ export function worthAnalysing(r: PendingRecord): boolean {
 export function heuristicAnalyse(r: PendingRecord): SignalOutput {
   const text = recText(r);
   const isProblem = worthAnalysing(r);
-  const wtp = /\b(would pay|willing to pay|i'?d pay|we'?d pay|happy to pay|paying for|budget for|worth paying)\b[^.\n]{0,60}/i.exec(text);
+  const wtp = wtpMatch(text);
   return {
     record_id: r.id,
     content_hash: r.content_hash,
@@ -58,10 +59,16 @@ export function heuristicAnalyse(r: PendingRecord): SignalOutput {
     use_case: null,
     severity: null,
     wtp_evidence: !!wtp,
-    wtp_quote: wtp ? wtp[0].trim().slice(0, 200) : null,
+    wtp_quote: wtp,
     competitors: [],
     language: r.language,
   };
+}
+
+/** A willingness-to-pay phrase taken verbatim from the text (so it is grounded by construction), or null. */
+export function wtpMatch(text: string): string | null {
+  const m = /\b(would pay|willing to pay|i'?d pay|we'?d pay|happy to pay|paying for|budget for|worth paying)\b[^.\n]{0,60}/i.exec(text);
+  return m ? m[0].trim().slice(0, 200) : null;
 }
 
 // ------------------------------------------------------------------------------------------------ Gemini
@@ -186,6 +193,11 @@ export interface ClusterSummary {
   development_feasibility: number;
   caveats: string;
   model: string;
+  /** Provider-reported usage, persisted for cost accounting (the provider's figure is kept as reported, not assumed authoritative). */
+  usage?: {
+    prompt_tokens: number; completion_tokens: number; total_tokens: number;
+    reported_cost_usd: number | null; provider: string; generated_at: string;
+  };
 }
 
 const SUMMARY_SYSTEM = `You help a founder judge a software opportunity. Input: problem statements extracted from independent public discussions (GitHub, Hacker News, Stack Exchange) that were grouped as one underlying problem.
@@ -220,62 +232,99 @@ export async function summariseCluster(cfg: GeminiConfig, statements: string[]):
 }
 
 
-// ------------------------------------------------------------------------------------------------ OpenRouter (cluster intelligence only)
+// ------------------------------------------------------------------------------------------------ Engine B: LFM3 via OpenRouter chat completions (optional summaries)
 
-/** OpenRouter is initially limited to cluster summaries; Gemini classification and embeddings remain unchanged. */
+/**
+ * Optional readable summaries only. Core analysis never depends on this: any failure here is contained by the caller.
+ * Only an explicit ":free" model slug is accepted - there is no paid model and no paid fallback.
+ */
+export const LFM3_DEFAULT_MODEL = 'liquid/lfm-3-1.7b:free';
+/** Part of the cache identity. Bump whenever SUMMARY_SYSTEM, the statement selection or the validation rules change. */
+export const SUMMARY_CONFIG_VERSION = 'summary-v1';
+
 export interface OpenRouterConfig {
   apiKey: string;
   model: string;
+  /** SUMMARY_CONFIG_VERSION plus the optional AI_CACHE_VERSION operators can change to invalidate cached summaries without a deploy. */
+  configVersion: string;
   http: HttpClient;
 }
 
 export function openRouterConfigFromEnv(env: Record<string, string | undefined>, http: HttpClient): OpenRouterConfig | null {
-  if (env.OPENROUTER_ENABLED !== 'true' || !env.OPENROUTER_API_KEY) return null;
+  if (openRouterConfigProblem(env) !== null || env.OPENROUTER_ENABLED !== 'true') return null;
+  const cacheVersion = (env.AI_CACHE_VERSION ?? '').trim().replace(/[^A-Za-z0-9._-]/g, '').slice(0, 24);
   return {
-    apiKey: env.OPENROUTER_API_KEY,
-    model: env.OPENROUTER_MODEL || 'openai/gpt-4o-mini',
+    apiKey: env.OPENROUTER_API_KEY!,
+    model: (env.OPENROUTER_MODEL || LFM3_DEFAULT_MODEL).trim(),
+    configVersion: cacheVersion ? `${SUMMARY_CONFIG_VERSION}+${cacheVersion}` : SUMMARY_CONFIG_VERSION,
     http,
   };
 }
 
-export async function summariseClusterOpenRouter(cfg: OpenRouterConfig, statements: string[]): Promise<ClusterSummary | null> {
-  const { data } = await cfg.http.postJson<{
-    choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
-    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number };
-  }>(
-    'https://openrouter.ai/api/v1/chat/completions',
-    {
-      model: cfg.model,
-      temperature: 0.1,
-      max_tokens: 900,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: SUMMARY_SYSTEM },
-        { role: 'user', content: JSON.stringify({ statements: statements.slice(0, 20) }) },
-      ],
-    },
-    {
-      headers: {
-        authorization: `Bearer ${cfg.apiKey}`,
-        'http-referer': 'https://demandradar.app',
-        'x-title': 'DemandRadar',
-      },
-      minIntervalKey: 'openrouter',
-    },
-  );
-  const message = data?.choices?.[0]?.message?.content;
-  const rawText = typeof message === 'string'
-    ? message
-    : Array.isArray(message) ? message.map((part) => part.text ?? '').join('') : '';
-  if (!rawText) throw new Error('OpenRouter returned no content');
-  let raw: unknown;
+/** Why an ENABLED summary engine cannot run (null when it can, or when it is simply not enabled). Never contains a secret. */
+export function openRouterConfigProblem(env: Record<string, string | undefined>): string | null {
+  if (env.OPENROUTER_ENABLED !== 'true') return null;
+  if (!env.OPENROUTER_API_KEY) return 'OPENROUTER_ENABLED is true but OPENROUTER_API_KEY is not set';
+  const model = (env.OPENROUTER_MODEL || LFM3_DEFAULT_MODEL).trim();
+  if (!isFreeModelSlug(model)) return `OPENROUTER_MODEL "${model.slice(0, 60)}" is not an explicit :free model; paid models are not allowed`;
+  return null;
+}
+
+/** Reasoning models may wrap the JSON in <think> blocks, code fences or a sentence. Returns the first JSON object found, or null. */
+export function extractJsonObject(text: string): unknown {
+  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '').trim();
   try {
-    raw = JSON.parse(rawText.replace(/^```(?:json)?\s*|\s*```$/g, ''));
-  } catch {
-    throw new Error('OpenRouter returned malformed JSON');
+    return JSON.parse(cleaned);
+  } catch { /* fall through to the brace scan */ }
+  const a = cleaned.indexOf('{');
+  const b = cleaned.lastIndexOf('}');
+  if (a >= 0 && b > a) {
+    try { return JSON.parse(cleaned.slice(a, b + 1)); } catch { /* not JSON */ }
   }
+  return null;
+}
+
+/** One live summary request. Throws AiCallError on any failure, including an unusable or truncated answer. Never returns a partial summary. */
+export async function requestClusterSummary(cfg: OpenRouterConfig, statements: string[]): Promise<ClusterSummary> {
+  let data: {
+    choices?: Array<{ finish_reason?: string; message?: { content?: string | Array<{ type?: string; text?: string }> | null } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cost?: number };
+    error?: { code?: number; message?: string };
+  };
+  try {
+    ({ data } = await cfg.http.postJson<typeof data>(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        model: cfg.model,
+        temperature: 0.1,
+        // LFM3 reasons before it answers; leave room for that so the JSON is not cut off.
+        max_tokens: 1600,
+        response_format: { type: 'json_object' },
+        provider: { allow_fallbacks: false },
+        messages: [
+          { role: 'system', content: SUMMARY_SYSTEM },
+          { role: 'user', content: JSON.stringify({ statements: statements.slice(0, 20) }) },
+        ],
+      },
+      {
+        headers: { authorization: `Bearer ${cfg.apiKey}`, 'http-referer': 'https://demandradar.app', 'x-title': 'DemandRadar' },
+        minIntervalKey: 'openrouter',
+      },
+    ));
+  } catch (e) {
+    throw classifyAiFailure(e);
+  }
+  if (data?.error) throw aiErrorFromBody(data.error); // upstream failure reported inside a 200 body
+  const choice = data?.choices?.[0];
+  const content = choice?.message?.content;
+  const rawText = typeof content === 'string' ? content : Array.isArray(content) ? content.map((part) => part.text ?? '').join('') : '';
+  if (!rawText.trim()) {
+    throw new AiCallError(choice?.finish_reason === 'length' ? 'summary was cut off before any answer (finish_reason=length)' : 'OpenRouter returned no content', 'invalid_response');
+  }
+  const raw = extractJsonObject(rawText);
+  if (raw === null) throw new AiCallError(choice?.finish_reason === 'length' ? 'summary JSON was truncated (finish_reason=length)' : 'OpenRouter returned malformed JSON', 'invalid_response');
   const summary = validateSummary(raw, statements, cfg.model);
-  if (!summary) return null;
+  if (!summary) throw new AiCallError('summary failed validation', 'invalid_response');
   // Persist provider-reported usage alongside the summary for later cost accounting.
   return {
     ...summary,
@@ -288,5 +337,15 @@ export async function summariseClusterOpenRouter(cfg: OpenRouterConfig, statemen
       provider: 'openrouter',
       generated_at: new Date().toISOString(),
     },
-  } as ClusterSummary;
+  };
+}
+
+/** Compatibility wrapper: null for an unusable answer, throws for service problems (previous contract). */
+export async function summariseClusterOpenRouter(cfg: OpenRouterConfig, statements: string[]): Promise<ClusterSummary | null> {
+  try {
+    return await requestClusterSummary(cfg, statements);
+  } catch (e) {
+    if (e instanceof AiCallError && e.kind === 'invalid_response') return null;
+    throw e;
+  }
 }

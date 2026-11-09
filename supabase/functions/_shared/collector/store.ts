@@ -1,5 +1,7 @@
 import { RawRecordInput } from './types.ts';
 import { SignalOutput, PendingRecord } from './ai.ts';
+import type { AiCacheKey, AiCacheStore, AiTask, AiUsageCounters, CacheBegin } from './ai-common.ts';
+import type { SignalAiRow } from './decisions.ts';
 import { sleep } from './util.ts';
 
 export interface ClaimedSource {
@@ -29,7 +31,7 @@ export interface UpsertResult {
 }
 
 /** Everything the engine needs from persistence. SupabaseStore is the production implementation. */
-export interface Store {
+export interface Store extends AiCacheStore {
   claimDueSources(o: { limit: number; force?: string | null; trigger: 'schedule' | 'manual'; lockSeconds: number }): Promise<ClaimedSource[]>;
   finishRun(o: { runId: string; sourceId: string; status: 'success' | 'partial' | 'error'; cursor: Record<string, unknown> | null; stats: RunStats; error: string | null; nextRunAt: Date | null }): Promise<void>;
   noteUsage(sourceId: string, usage: { requests: number; errors: number; rateLimited: number }): Promise<void>;
@@ -53,6 +55,10 @@ export interface Store {
   clustersNeedingSummary(limit: number): Promise<Array<{ id: string; statements: string[] }>>;
   saveClusterSummary(id: string, summary: unknown): Promise<void>;
   requeueHeuristicAnalysis(limit: number): Promise<number>;
+  /** Adds one run's counters for an AI engine to today's dr_ai_usage row. Best-effort telemetry: callers must not let a failure here affect processing. */
+  aiNoteUsage(engine: AiTask, usage: AiUsageCounters): Promise<void>;
+  /** Stores the model's own outputs (probability, confidence, citations) in dr_signal_ai, apart from the demand data. */
+  saveSignalAi(rows: SignalAiRow[]): Promise<number>;
 }
 
 /** PostgREST RPC client using the service-role key (server-side only; never shipped to the browser). */
@@ -156,5 +162,24 @@ export class SupabaseStore implements Store {
   }
   async requeueHeuristicAnalysis(limit: number) {
     return (await this.rpc<number>('dr_requeue_heuristic_analysis', { p_limit: limit })) ?? 0;
+  }
+
+  // ---- AI cache / telemetry (see supabase/migrations/20261109000000_ai_results_cache.sql)
+  async aiCacheBegin(key: AiCacheKey, leaseSeconds: number): Promise<CacheBegin> {
+    const r = await this.rpc<CacheBegin>('dr_ai_cache_begin', { p_task: key.task, p_hash: key.hash, p_model: key.model, p_version: key.configVersion, p_lease_seconds: leaseSeconds });
+    if (!r || typeof r !== 'object' || !['hit', 'claimed', 'busy', 'cooldown'].includes((r as { state?: string }).state ?? '')) throw new Error('dr_ai_cache_begin returned an unexpected value');
+    return r;
+  }
+  async aiCacheComplete(id: string, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>): Promise<boolean> {
+    return (await this.rpc<boolean>('dr_ai_cache_complete', { p_id: id, p_result: result, p_citations: citations, p_usage: usage })) === true;
+  }
+  async aiCacheFail(id: string, reason: string) { await this.rpc('dr_ai_cache_fail', { p_id: id, p_reason: reason }); }
+  async aiCacheAbandon(id: string) { await this.rpc('dr_ai_cache_abandon', { p_id: id }); }
+  async aiCacheInvalidate(id: string) { await this.rpc('dr_ai_cache_invalidate', { p_id: id }); }
+  async aiNoteUsage(engine: AiTask, usage: AiUsageCounters) { await this.rpc('dr_ai_note_usage', { p_engine: engine, p_counters: usage }); }
+  async saveSignalAi(rows: SignalAiRow[]): Promise<number> {
+    let n = 0;
+    for (let i = 0; i < rows.length; i += 100) n += (await this.rpc<number>('dr_save_signal_ai', { p_rows: rows.slice(i, i + 100) })) ?? 0;
+    return n;
   }
 }
