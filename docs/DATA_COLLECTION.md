@@ -109,3 +109,10 @@ npm run collector:live-check [github|hackernews|stackexchange]   # real APIs, no
 npx tsc --noEmit && npx vite build
 psql -d <test db> -f supabase/tests/00_stub_supabase.sql   # then migrations, then 10_market_intel.test.sql (plain Postgres + pgvector only)
 ```
+
+## 10. AI engines (Decisions Fast + optional LFM3) – development branch, disabled by default
+
+A two-engine AI layer (record classification with `parallel/decisions-fast:free` through OpenRouter's Decisions API, optional summaries with `liquid/lfm-3-1.7b:free`) with a persistent Supabase result cache,
+usage counters and a read-only per-cluster evidence profile. **Nothing is enabled by default and production settings (`OPENROUTER_ENABLED=false`, paused cron) are unchanged.**
+Architecture, configuration, safeguards, tests, limitations and the step-by-step review/deploy runbook: [`docs/AI_ARCHITECTURE.md`](AI_ARCHITECTURE.md).
+It adds one **optional, additive** migration, `supabase/migrations/20261109000000_ai_results_cache.sql`, to run (SQL editor) *before* enabling either engine; it is not needed for the existing features.
