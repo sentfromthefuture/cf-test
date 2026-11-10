@@ -216,3 +216,91 @@ test('a cache outage cannot cause unbounded model calls: the engine stops and no
   assert.equal(out.leftPending, 5);
   assert.ok(state.stopped);
 });
+
+// ------------------------------------------------------------------ CACHE FIRST: limits apply only to a miss that needs a live request
+const warm = async (store: MemoryStore, ids: string[]) => {
+  const net = scriptedHttp(() => decisionsBody());
+  await run(store, cfgFor(net.http), ids.map((id) => pending(id)));
+  assert.equal(net.calls.length, ids.length, 'warm-up made one request per record');
+};
+
+test('CACHE FIRST: cached results are served even when the live-request budget is already exhausted', async () => {
+  const store = new MemoryStore();
+  await warm(store, ['c0', 'c1', 'c2']);
+  const net = scriptedHttp(() => decisionsBody());
+  const state = newDecisionsRunState();
+  state.liveCalls = 2; // the run's whole budget (2) has already been spent
+  const { out } = await run(store, cfgFor(net.http, { maxLivePerRun: 2 }), [pending('n0'), pending('c0'), pending('n1'), pending('c1'), pending('c2')], state);
+  assert.equal(net.calls.length, 0, 'no live request: the budget is spent');
+  assert.equal(out.signals.length, 3, 'all three cached records were still served');
+  assert.deepEqual(out.signals.map((s) => s.record_id).sort(), ['c0', 'c1', 'c2']);
+  assert.equal(out.leftPending, 2, 'only the two misses wait');
+  assert.equal(state.cacheHits, 3);
+  assert.equal(state.deferred, 2);
+  assert.match(state.stopped!, /per-run request limit/);
+  assert.deepEqual(out.failedIds, [], 'deferring a miss is not failing it');
+  assert.equal([...store.aiCache.values()].filter((e) => e.status !== 'succeeded').length, 0, 'nothing was recorded against the deferred inputs');
+});
+
+test('CACHE FIRST: the budget runs out mid-batch, and cached records AFTER that point are still served', async () => {
+  const store = new MemoryStore();
+  await warm(store, ['c0', 'c1']);
+  const net = scriptedHttp(() => decisionsBody());
+  const { out, state } = await run(store, cfgFor(net.http, { maxLivePerRun: 1 }), [pending('n0'), pending('n1'), pending('n2'), pending('c0'), pending('c1')]);
+  assert.equal(net.calls.length, 1, 'exactly one live request');
+  assert.deepEqual(out.signals.map((s) => s.record_id).sort(), ['c0', 'c1', 'n0'], 'n0 live, c0 and c1 from the cache after the budget ran out');
+  assert.equal(out.leftPending, 2);
+  assert.equal(state.cacheHits, 2);
+  assert.equal(state.liveCalls, 1);
+});
+
+test('CACHE FIRST: cached results are served when too little time is left for another request', async () => {
+  const store = new MemoryStore();
+  await warm(store, ['c0', 'c1']);
+  const net = scriptedHttp(() => decisionsBody());
+  const { out, state } = await run(store, cfgFor(net.http), [pending('n0'), pending('c0'), pending('c1')], newDecisionsRunState(), 10_000);
+  assert.equal(net.calls.length, 0, 'no request is started with 10s left');
+  assert.deepEqual(out.signals.map((s) => s.record_id).sort(), ['c0', 'c1']);
+  assert.equal(out.leftPending, 1);
+  assert.match(state.stopped!, /not enough time/);
+  assert.equal(state.cacheHits, 2);
+});
+
+test('CACHE FIRST: after a service failure switches live requests off, cached records are still served', async () => {
+  const store = new MemoryStore();
+  await warm(store, ['c0', 'c1']);
+  const net = scriptedHttp(() => { throw new HttpError('HTTP 429', 429); });
+  const { out, state } = await run(store, cfgFor(net.http), [pending('n0'), pending('c0'), pending('n1'), pending('c1')]);
+  assert.equal(net.calls.length, 1, 'one failed request, then no more');
+  assert.deepEqual(out.signals.map((s) => s.record_id).sort(), ['c0', 'c1']);
+  assert.equal(out.leftPending, 2);
+  assert.deepEqual(out.failedIds, []);
+  assert.match(state.stopped!, /rate_limited/);
+  assert.equal([...store.aiCache.values()].filter((e) => e.status !== 'succeeded').length, 0, 'the outage was not recorded against any input');
+});
+
+test('CACHE FIRST: a deferred record is retried (not lost) once a later run has budget and time', async () => {
+  const store = new MemoryStore();
+  await warm(store, ['c0']);
+  const net = scriptedHttp(() => decisionsBody());
+  const first = await run(store, cfgFor(net.http, { maxLivePerRun: 1 }), [pending('n0'), pending('n1'), pending('c0')]);
+  assert.equal(first.out.leftPending, 1);
+  const calls = net.calls.length;
+  const second = await run(store, cfgFor(net.http, { maxLivePerRun: 1 }), [pending('n1')]);
+  assert.equal(net.calls.length, calls + 1, 'n1 is now sent exactly once');
+  assert.equal(second.out.signals.length, 1);
+  assert.equal(second.out.leftPending, 0);
+});
+
+test('CACHE FIRST: an already-deferred record is not looked up again within the same run', async () => {
+  const store = new MemoryStore();
+  const net = scriptedHttp(() => decisionsBody());
+  const state = newDecisionsRunState();
+  const cfg = cfgFor(net.http, { maxLivePerRun: 1 });
+  await run(store, cfg, [pending('n0'), pending('n1')], state);
+  const beginsAfterFirstBatch = store.aiCacheCalls.begin;
+  const again = await run(store, cfg, [pending('n1')], state);
+  assert.equal(store.aiCacheCalls.begin, beginsAfterFirstBatch, 'no further cache round trip for a record already known to be deferred');
+  assert.equal(again.out.leftPending, 1);
+  assert.equal(state.deferred, 1, 'counted once, not once per batch');
+});

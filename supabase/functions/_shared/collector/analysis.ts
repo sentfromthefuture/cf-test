@@ -79,7 +79,8 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
       // dr_claim_pending_records treats a limit below 1 as 1, so never ask when nothing is left of the test cap.
       if (testMode && remaining <= 0) break;
       // Test mode: ask for no more than what is left of the cap AND truncate the reply, so a store that over-returns cannot exceed it.
-      const want = testMode ? remaining : d.decisions ? Math.max(1, Math.min(24, d.decisions.maxLivePerRun)) : d.gemini ? 36 : 100;
+      // For Decisions the batch is NOT sized by the live-request budget: cache hits are free, so a wide window serves as many of them as possible.
+      const want = testMode ? remaining : d.decisions ? 24 : d.gemini ? 36 : 100;
       const pending = testMode ? (await d.store.claimPending(want)).slice(0, remaining) : await d.store.claimPending(want);
       if (pending.length === 0) break;
       if (testMode) remaining -= pending.length;
@@ -163,8 +164,9 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
       stats.problems += signals.filter((s) => s.is_problem).length;
       if (llmDown || aiPersistFailed) break; // do not hammer a failing model
       // Records the Decisions engine deliberately left pending (budget, outage, another worker, cooling down) are claimed first again.
-      // Stop when the engine was switched off for this run, or when this batch made no progress at all; otherwise keep draining newer records.
-      if (decisionsOut && decisionsOut.leftPending > 0 && (decisionsRun.stopped || decisionsOut.signals.length + decisionsOut.failedIds.length + skip.length === 0)) break;
+      // Keep going while a batch still makes progress (cached results are served even after live requests are no longer allowed);
+      // stop as soon as a batch makes none, which also guarantees termination.
+      if (decisionsOut && decisionsOut.leftPending > 0 && decisionsOut.signals.length + decisionsOut.failedIds.length + skip.length === 0) break;
       if (stats.failed > 0 && stats.analysed === 0) break;
       if (testMode) break; // exactly one bounded pass: never re-claim, so records that stay pending cannot be counted twice
     }

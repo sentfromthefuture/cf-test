@@ -1,15 +1,17 @@
 -- DemandRadar AI architecture (Decisions Fast + optional LFM3 summaries):
 -- persistent AI result cache, AI usage counters, per-signal model outputs and a read-only cluster evidence profile.
 --
--- ADDITIVE ONLY. This file creates new tables and new functions. It does not alter, drop or replace any existing
--- table, column, constraint or function (in particular dr_save_signals and dr_refresh_clusters are untouched, so
+-- ADDITIVE ONLY with respect to everything that exists on main. This file creates new tables and new functions. It does not alter, drop or
+-- replace any pre-existing table, column, constraint or function (in particular dr_save_signals and dr_refresh_clusters are untouched, so
 -- existing scoring and rankings do not change), and it does not read or modify existing rows.
 -- Like every dr_* object: RLS is enabled with NO policies and the functions are executable by service_role only.
 -- Nothing here calls any external service.
 
 -- ================================================================= tables
 -- One row per (task, input, model, config version). Only status = 'succeeded' rows ever hold a result.
---   pending   a worker holds a lease and is computing it (prevents duplicate concurrent processing)
+--   pending   a worker holds a lease and is computing it (prevents duplicate concurrent processing). Every lease carries a
+--             FENCING TOKEN (lease_epoch); complete/fail/abandon only act for the holder of the CURRENT token, so a worker whose
+--             lease expired and was taken over can no longer finish, fail or release the entry
 --   succeeded validated result stored; reused forever until the identity changes (see invalidation rules in docs/AI_ARCHITECTURE.md)
 --   failed    the INPUT produced an unusable answer (invalid/refused/bad request); no result stored; retried only after a growing cooldown
 create table if not exists public.dr_ai_cache (
@@ -20,6 +22,7 @@ create table if not exists public.dr_ai_cache (
   config_version  text not null,
   status          text not null default 'pending' check (status in ('pending', 'succeeded', 'failed')),
   lease_until     timestamptz,
+  lease_epoch     bigint not null default 0,   -- fencing token: incremented every time a lease is issued
   result          jsonb,
   citations       jsonb not null default '[]'::jsonb,
   usage           jsonb not null default '{}'::jsonb,
@@ -34,6 +37,14 @@ create table if not exists public.dr_ai_cache (
   constraint dr_ai_cache_succeeded_has_result check (status <> 'succeeded' or (result is not null and jsonb_typeof(result) = 'object')),
   constraint dr_ai_cache_only_succeeded_has_result check (status = 'succeeded' or result is null)
 );
+-- Upgrade safety: a database that already ran the FIRST revision of this migration has dr_ai_cache without the fencing column and the three
+-- unfenced function signatures that revision created. Add the column, and remove ONLY those superseded signatures (they exist nowhere else:
+-- they were never on main and nothing pre-existing depends on them) so an unfenced complete/fail/abandon can never be called.
+alter table public.dr_ai_cache add column if not exists lease_epoch bigint not null default 0;
+drop function if exists public.dr_ai_cache_complete(uuid, jsonb, jsonb, jsonb);
+drop function if exists public.dr_ai_cache_fail(uuid, text);
+drop function if exists public.dr_ai_cache_abandon(uuid);
+
 create index if not exists dr_ai_cache_housekeeping_idx on public.dr_ai_cache (status, coalesce(last_hit_at, completed_at, created_at));
 
 -- Per-engine, per-day counters (live calls, outcomes, cache effectiveness, tokens, provider-REPORTED cost).
@@ -81,7 +92,8 @@ revoke all on public.dr_ai_cache, public.dr_ai_usage, public.dr_signal_ai from a
 -- ================================================================= cache state machine
 -- Atomically decides what the caller may do for this identity:
 --   hit       a validated result exists (returned)
---   claimed   caller now holds the lease and must compute, then complete / fail / abandon
+--   claimed   caller now holds the lease (returned with its fencing 'epoch') and must compute, then complete / fail / abandon
+--             presenting that epoch
 --   busy      another worker holds a fresh lease: do NOT call the model
 --   cooldown  an earlier attempt on this input failed; do not retry before retry_after
 create or replace function public.dr_ai_cache_begin(
@@ -89,14 +101,15 @@ create or replace function public.dr_ai_cache_begin(
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
 declare
   v public.dr_ai_cache%rowtype;
+  v_epoch bigint;
   v_lease interval := make_interval(secs => least(greatest(coalesce(p_lease_seconds, 120), 10), 900));
 begin
-  insert into public.dr_ai_cache (task, input_hash, model, config_version, status, lease_until)
-  values (p_task, p_hash, p_model, p_version, 'pending', now() + v_lease)
+  insert into public.dr_ai_cache (task, input_hash, model, config_version, status, lease_until, lease_epoch)
+  values (p_task, p_hash, p_model, p_version, 'pending', now() + v_lease, 1)
   on conflict (task, input_hash, model, config_version) do nothing
   returning * into v;
   if v.id is not null then
-    return jsonb_build_object('state', 'claimed', 'id', v.id);
+    return jsonb_build_object('state', 'claimed', 'id', v.id, 'epoch', v.lease_epoch);
   end if;
 
   -- Row-lock so two concurrent callers cannot both decide to take over the same expired lease.
@@ -118,15 +131,19 @@ begin
     return jsonb_build_object('state', 'busy', 'id', v.id);
   end if;
 
-  -- expired lease (a worker died) or a failed row whose cooldown has elapsed: take over, keeping the attempt history
-  update public.dr_ai_cache set status = 'pending', lease_until = now() + v_lease where id = v.id;
-  return jsonb_build_object('state', 'claimed', 'id', v.id);
+  -- expired lease (a worker died or is just slow) or a failed row whose cooldown has elapsed: take over, keeping the attempt
+  -- history. The epoch moves forward, which fences out every earlier holder of this entry.
+  update public.dr_ai_cache set status = 'pending', lease_until = now() + v_lease, lease_epoch = lease_epoch + 1
+   where id = v.id returning lease_epoch into v_epoch;
+  return jsonb_build_object('state', 'claimed', 'id', v.id, 'epoch', v_epoch);
 end $$;
 
 -- Stores a VALIDATED successful result. Refuses anything that is not a non-null JSON object, and only ever
--- transitions a row that is still pending, so a failed/partial answer can never be recorded as a success.
+-- transitions a row that is still pending AND whose current lease epoch equals p_epoch, so (a) a failed/partial answer
+-- can never be recorded as a success and (b) a worker whose lease expired and was taken over cannot overwrite or pre-empt
+-- the newer holder. Returns false (and changes nothing) when the caller no longer holds the lease.
 create or replace function public.dr_ai_cache_complete(
-  p_id uuid, p_result jsonb, p_citations jsonb default '[]'::jsonb, p_usage jsonb default '{}'::jsonb)
+  p_id uuid, p_epoch bigint, p_result jsonb, p_citations jsonb default '[]'::jsonb, p_usage jsonb default '{}'::jsonb)
 returns boolean language plpgsql security definer set search_path = public, extensions as $$
 declare n integer;
 begin
@@ -138,14 +155,15 @@ begin
     citations = case when jsonb_typeof(p_citations) = 'array' then p_citations else '[]'::jsonb end,
     usage = case when jsonb_typeof(p_usage) = 'object' then p_usage else '{}'::jsonb end,
     lease_until = null, retry_after = null, last_failure = null, completed_at = now()
-   where id = p_id and status = 'pending';
+   where id = p_id and status = 'pending' and lease_epoch = p_epoch;
   get diagnostics n = row_count;
   return n > 0;
 end $$;
 
 -- The INPUT produced an unusable answer (invalid response, refusal, rejected request). No result is stored; the row
--- records the failure and blocks retries for 1h, 2h, 4h ... capped at 7 days.
-create or replace function public.dr_ai_cache_fail(p_id uuid, p_reason text default null)
+-- records the failure and blocks retries for 1h, 2h, 4h ... capped at 7 days. Fenced like complete(): a stale holder cannot
+-- mark an entry failed while a newer holder is working on it.
+create or replace function public.dr_ai_cache_fail(p_id uuid, p_epoch bigint, p_reason text default null)
 returns boolean language plpgsql security definer set search_path = public, extensions as $$
 declare n integer;
 begin
@@ -154,19 +172,20 @@ begin
     retry_after = now() + make_interval(hours => least(168, (2 ^ least(failed_attempts, 8))::integer)),
     failed_attempts = failed_attempts + 1,
     last_failure = left(coalesce(p_reason, 'failed'), 200)
-   where id = p_id and status = 'pending';
+   where id = p_id and status = 'pending' and lease_epoch = p_epoch;
   get diagnostics n = row_count;
   return n > 0;
 end $$;
 
 -- The SERVICE had a problem (rate limit, outage, bad credentials), not the input: release the lease without recording
 -- a failure against the input, so it is picked up as soon as the service recovers.
-create or replace function public.dr_ai_cache_abandon(p_id uuid)
+create or replace function public.dr_ai_cache_abandon(p_id uuid, p_epoch bigint)
 returns void language plpgsql security definer set search_path = public, extensions as $$
 begin
+  -- Fenced: only the CURRENT lease holder can release. A stale worker must not delete or reset a newer worker's lease.
   update public.dr_ai_cache set status = 'failed', lease_until = null, retry_after = now()
-   where id = p_id and status = 'pending' and failed_attempts > 0;   -- keep earlier failure history
-  delete from public.dr_ai_cache where id = p_id and status = 'pending' and failed_attempts = 0;
+   where id = p_id and status = 'pending' and lease_epoch = p_epoch and failed_attempts > 0;   -- keep earlier failure history
+  delete from public.dr_ai_cache where id = p_id and status = 'pending' and lease_epoch = p_epoch and failed_attempts = 0;
 end $$;
 
 -- A stored result that no longer passes application validation (e.g. schema drift): remove it so it is recomputed once.

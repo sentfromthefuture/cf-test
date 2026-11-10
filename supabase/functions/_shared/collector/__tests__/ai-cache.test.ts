@@ -3,7 +3,7 @@
 // these tests prove the application-side rules on top of it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AiCacheKey, AiCallError, aiInputHash, cachedCompute, canonicalJson, Computed } from '../ai-common.ts';
+import { AiCacheError, AiCacheKey, AiCallError, aiInputHash, cachedCompute, canonicalJson, Computed } from '../ai-common.ts';
 import { MemoryStore, silentLog } from './helpers.ts';
 
 const HASH = 'a'.repeat(64);
@@ -179,10 +179,127 @@ test('completing is allowed only for the pending row and only with a JSON object
   const store = new MemoryStore();
   const b = await store.aiCacheBegin(key(), 60);
   assert.equal(b.state, 'claimed');
-  const id = (b as { id: string }).id;
-  await assert.rejects(store.aiCacheComplete(id, null as never, [], {}), /non-null JSON object/);
+  const lease = { id: (b as { id: string }).id, epoch: (b as { epoch: number }).epoch };
+  await assert.rejects(store.aiCacheComplete(lease, null as never, [], {}), /non-null JSON object/);
   assert.equal(store.aiCache.get([...store.aiCache.keys()][0])!.status, 'pending', 'rejected completion leaves it pending');
-  assert.equal(await store.aiCacheComplete(id, { ok: 1 }, [], {}), true);
-  assert.equal(await store.aiCacheComplete(id, { ok: 2 }, [], {}), false, 'first stored result wins');
+  assert.equal(await store.aiCacheComplete(lease, { ok: 1 }, [], {}), true);
+  assert.equal(await store.aiCacheComplete(lease, { ok: 2 }, [], {}), false, 'first stored result wins');
   assert.deepEqual([...store.aiCache.values()][0].result, { ok: 1 });
+});
+
+// ------------------------------------------------------------------ cache first: the gate applies only to a miss
+test('the gate is never consulted for a cache hit, busy or cooling-down entry; it only guards a miss', async () => {
+  const store = new MemoryStore();
+  const { state, compute } = counted();
+  await cachedCompute(store, key(), compute, revive); // warm
+  let consulted = 0;
+  const gate = () => { consulted++; return 'budget spent'; };
+  const hit = await cachedCompute(store, key(), compute, revive, { gate });
+  assert.equal(hit.status, 'hit', 'a cached result is served even though the gate would refuse every live request');
+  assert.equal(consulted, 0);
+  assert.equal(state.n, 1);
+
+  const miss = await cachedCompute(store, key({ hash: 'b'.repeat(64) }), compute, revive, { gate });
+  assert.equal(miss.status, 'deferred');
+  assert.equal(miss.status === 'deferred' && miss.reason, 'budget spent');
+  assert.equal(consulted, 1, 'consulted exactly once, for the miss');
+  assert.equal(state.n, 1, 'no live request was made');
+
+  await store.aiCacheBegin(key({ hash: 'c'.repeat(64) }), 120); // another worker holds it
+  assert.equal((await cachedCompute(store, key({ hash: 'c'.repeat(64) }), compute, revive, { gate })).status, 'busy');
+  assert.equal(consulted, 1, 'gate not consulted for a busy entry either');
+});
+
+test('a deferred miss releases its lease and records nothing against the input', async () => {
+  const store = new MemoryStore();
+  const { state, compute } = counted();
+  const out = await cachedCompute(store, key(), compute, revive, { gate: () => 'not enough time left in this run' });
+  assert.equal(out.status, 'deferred');
+  assert.equal(store.aiCache.size, 0, 'lease released; no failure marker, no cooldown');
+  assert.equal(store.aiCacheCalls.fail, 0);
+  assert.equal((await cachedCompute(store, key(), compute, revive)).status, 'computed', 'next run can compute immediately');
+  assert.equal(state.n, 1);
+  // after a REAL earlier failure, deferring keeps the history but does not extend the cooldown
+  const s2 = new MemoryStore();
+  let now = 1_000_000; s2.clock = () => now;
+  await assert.rejects(cachedCompute(s2, key(), async () => { throw new AiCallError('bad', 'invalid_response'); }, revive), AiCallError);
+  now += 61 * 60_000;
+  assert.equal((await cachedCompute(s2, key(), compute, revive, { gate: () => 'budget' })).status, 'deferred');
+  const e = [...s2.aiCache.values()][0];
+  assert.deepEqual({ status: e.status, attempts: e.failedAttempts }, { status: 'failed', attempts: 1 }, 'history kept, attempts not inflated');
+  assert.equal((await cachedCompute(s2, key(), compute, revive)).status, 'computed', 'and it is retryable right away');
+});
+
+// ------------------------------------------------------------------ lease fencing
+test('FENCING: a worker whose lease expired cannot store a result over the worker that took over', async () => {
+  const store = new MemoryStore();
+  let now = 7_000_000; store.clock = () => now;
+  let releaseA!: () => void;
+  const gateA = new Promise<void>((r) => (releaseA = r));
+  const computeA = async (): Promise<Computed<Record<string, unknown>>> => { await gateA; return { value: { ok: 1, by: 'A' }, result: { ok: 1, by: 'A' }, citations: [], usage: {} }; };
+  const computeB = async (): Promise<Computed<Record<string, unknown>>> => ({ value: { ok: 1, by: 'B' }, result: { ok: 1, by: 'B' }, citations: [], usage: {} });
+
+  const a = cachedCompute(store, key(), computeA, revive, { log: silentLog });          // A is slow
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal([...store.aiCache.values()][0].epoch, 1, 'A holds epoch 1');
+  now += 121_000;                                                                       // A's lease expires
+  const b = await cachedCompute(store, key(), computeB, revive, { log: silentLog });    // B takes over and finishes
+  assert.equal(b.status, 'computed');
+  assert.equal([...store.aiCache.values()][0].epoch, 2, 'the takeover moved the epoch forward');
+
+  releaseA();                                                                           // A finally finishes
+  const aOut = await a;
+  assert.equal(aOut.status, 'computed', 'A still returns the (valid) answer it computed');
+  assert.equal(aOut.status === 'computed' && aOut.stored, false, 'but it was NOT stored: A no longer holds the lease');
+  const entry = [...store.aiCache.values()][0];
+  assert.equal(entry.status, 'succeeded');
+  assert.deepEqual(entry.result, { ok: 1, by: 'B' }, 'the current holder\'s result is the one that stays');
+});
+
+test('FENCING: a stale worker failing or giving up cannot disturb the new holder\'s lease', async () => {
+  for (const failure of [new AiCallError('bad answer', 'invalid_response'), new AiCallError('rate limited', 'rate_limited', 429)]) {
+    const store = new MemoryStore();
+    let now = 9_000_000; store.clock = () => now;
+    let failA!: () => void;
+    const gateA = new Promise<void>((_r, rej) => (failA = () => rej(failure)));
+    const a = cachedCompute(store, key(), async () => { await gateA; throw new Error('unreachable'); }, revive, { log: silentLog }).catch((e) => e as AiCallError);
+    await new Promise((r) => setTimeout(r, 5));
+    now += 121_000;
+    const bLease = await store.aiCacheBegin(key(), 120); // B takes over and is still working
+    assert.equal(bLease.state, 'claimed');
+
+    failA();
+    const err = await a;
+    assert.ok(err instanceof AiCallError && err.kind === failure.kind, 'A still sees its own failure');
+    const entry = [...store.aiCache.values()][0];
+    assert.equal(entry.status, 'pending', `${failure.kind}: B's lease survives A's late failure`);
+    assert.equal(entry.epoch, (bLease as { epoch: number }).epoch);
+    assert.equal(entry.failedAttempts, 0, 'no failure was recorded against the input by the stale worker');
+    assert.equal((await store.aiCacheBegin(key(), 120)).state, 'busy', 'a third worker still waits for B');
+    assert.equal(await store.aiCacheComplete({ id: entry.id, epoch: (bLease as { epoch: number }).epoch }, { ok: 1, by: 'B' }, [], {}), true, 'B can still complete');
+  }
+});
+
+test('FENCING: leases carry an increasing epoch, including takeover of a failed entry', async () => {
+  const store = new MemoryStore();
+  let now = 3_000_000; store.clock = () => now;
+  const first = await store.aiCacheBegin(key(), 120) as { epoch: number };
+  now += 121_000;
+  const second = await store.aiCacheBegin(key(), 120) as { epoch: number };
+  assert.ok(second.epoch > first.epoch);
+  await store.aiCacheFail({ id: (second as any).id, epoch: second.epoch }, 'invalid_response');
+  now += 61 * 60_000;
+  const third = await store.aiCacheBegin(key(), 120) as { epoch: number };
+  assert.ok(third.epoch > second.epoch, 'retry after a cooldown is also a new lease');
+  assert.equal(await store.aiCacheComplete({ id: (second as any).id, epoch: first.epoch }, { ok: 1 }, [], {}), false, 'an epoch from two leases ago is refused');
+  assert.equal(await store.aiCacheComplete({ id: (second as any).id, epoch: second.epoch }, { ok: 1 }, [], {}), false, 'and so is the previous one');
+  assert.equal(await store.aiCacheComplete({ id: (second as any).id, epoch: third.epoch }, { ok: 1 }, [], {}), true);
+});
+
+test('a failing cache store surfaces as AiCacheError, never as a model failure', async () => {
+  const store = new MemoryStore();
+  store.failAiCache = true;
+  const { state, compute } = counted();
+  await assert.rejects(cachedCompute(store, key(), compute, revive), (e: AiCallError) => e instanceof AiCacheError && e.systemic);
+  assert.equal(state.n, 0, 'no model call without a working cache');
 });

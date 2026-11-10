@@ -76,19 +76,30 @@ export interface AiCacheKey {
   hash: string;
 }
 
+/** Proof of lease ownership. `epoch` is the fencing token: complete/fail/abandon act only while it is still the entry's current epoch. */
+export interface AiLease { id: string; epoch: number }
+
 export type CacheBegin =
   | { state: 'hit'; id: string; result: unknown; citations: unknown; usage: unknown }
-  | { state: 'claimed'; id: string }
+  | { state: 'claimed'; id: string; epoch: number }
   | { state: 'busy'; id?: string }
   | { state: 'cooldown'; id?: string; retry_after?: string };
 
 /** What the cache needs from persistence. SupabaseStore implements it with the dr_ai_cache_* functions. */
 export interface AiCacheStore {
   aiCacheBegin(key: AiCacheKey, leaseSeconds: number): Promise<CacheBegin>;
-  aiCacheComplete(id: string, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>): Promise<boolean>;
-  aiCacheFail(id: string, reason: string): Promise<void>;
-  aiCacheAbandon(id: string): Promise<void>;
+  /** Fenced: returns false (and changes nothing) unless `lease` is still the entry's current lease. */
+  aiCacheComplete(lease: AiLease, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>): Promise<boolean>;
+  /** Fenced like aiCacheComplete. */
+  aiCacheFail(lease: AiLease, reason: string): Promise<void>;
+  /** Fenced like aiCacheComplete: a worker that lost its lease cannot release or delete the new holder's. */
+  aiCacheAbandon(lease: AiLease): Promise<void>;
   aiCacheInvalidate(id: string): Promise<void>;
+}
+
+/** The cache store itself failed (not the model). The engine cannot reuse results, so callers stop spending requests for the run. */
+export class AiCacheError extends AiCallError {
+  constructor(message: string) { super(`AI cache unavailable: ${message}`, 'unavailable'); this.name = 'AiCacheError'; }
 }
 
 export interface Computed<T> {
@@ -104,53 +115,77 @@ export type CachedOutcome<T> =
   | { status: 'hit'; value: T; cacheId: string }
   | { status: 'computed'; value: T; cacheId: string; stored: boolean }
   | { status: 'busy'; cacheId: string | null }
-  | { status: 'cooldown'; cacheId: string | null };
+  | { status: 'cooldown'; cacheId: string | null }
+  /** A cache MISS that the caller's gate refused to turn into a live request. The lease was released; nothing was recorded against the input. */
+  | { status: 'deferred'; cacheId: string; reason: string };
 
 /**
- * Cache-first execution of one AI request.
- *  hit       -> the stored result is re-validated with `revive` and returned; no model call.
- *  claimed   -> `compute` runs. On success the validated result is stored. On an input-level failure (invalid/refused/rejected)
- *               a failure marker with a growing cooldown is stored (never a result). On a service-level failure the lease is simply released.
+ * Cache-first execution of one AI request. The cache is ALWAYS consulted first; `gate` (budget, time, circuit breaker) applies only when
+ * a live request would actually be needed.
+ *  hit       -> the stored result is re-validated with `revive` and returned; no model call, and no gate.
+ *  claimed   -> if `gate` returns a reason, the lease is released and the request is `deferred`. Otherwise `compute` runs. On success the
+ *               validated result is stored. On an input-level failure (invalid/refused/rejected) a failure marker with a growing cooldown is
+ *               stored (never a result). On a service-level failure the lease is simply released.
  *  busy      -> another worker is computing the same input: do not call the model.
  *  cooldown  -> this input failed recently: do not call the model yet.
- * `compute` errors are rethrown as AiCallError so the caller can decide whether to stop the engine for the run.
+ * Every write after a claim presents the lease's fencing epoch, so a worker whose lease expired and was taken over can no longer store,
+ * fail or release the entry. `compute` errors are rethrown as AiCallError so the caller can decide whether to stop the engine for the run;
+ * a failing cache store surfaces as AiCacheError.
  */
 export async function cachedCompute<T>(
   store: AiCacheStore, key: AiCacheKey,
   compute: () => Promise<Computed<T>>,
   revive: (stored: unknown) => T | null,
-  o: { leaseSeconds?: number; log?: Logger } = {},
+  o: { leaseSeconds?: number; log?: Logger; gate?: () => string | null } = {},
 ): Promise<CachedOutcome<T>> {
   for (let pass = 0; pass < 2; pass++) {
-    const b = await store.aiCacheBegin(key, o.leaseSeconds ?? 120);
+    let b: CacheBegin;
+    try {
+      b = await store.aiCacheBegin(key, o.leaseSeconds ?? 120);
+    } catch (e) {
+      throw new AiCacheError(safeError(e));
+    }
     if (b.state === 'hit') {
       const value = revive(b.result);
       if (value !== null) return { status: 'hit', value, cacheId: b.id };
       // A stored result that no longer validates (schema drift, manual edit): drop it and recompute exactly once.
       o.log?.warn('cached AI result failed validation; invalidating it', { task: key.task });
-      await store.aiCacheInvalidate(b.id);
+      try {
+        await store.aiCacheInvalidate(b.id);
+      } catch (e) {
+        throw new AiCacheError(safeError(e));
+      }
       continue;
     }
-    if (b.state === 'busy' || b.state === 'cooldown') return { status: b.state, cacheId: b.id ?? null };
+    if (b.state === 'busy') return { status: 'busy', cacheId: b.id ?? null };
+    if (b.state === 'cooldown') return { status: 'cooldown', cacheId: b.id ?? null };
+
+    const lease: AiLease = { id: b.id, epoch: b.epoch };
+    const refusal = o.gate?.() ?? null;
+    if (refusal !== null) {
+      await store.aiCacheAbandon(lease).catch(() => undefined);
+      return { status: 'deferred', cacheId: lease.id, reason: refusal };
+    }
 
     let c: Computed<T>;
     try {
       c = await compute();
     } catch (e) {
       const err = classifyAiFailure(e);
-      if (err.systemic) await store.aiCacheAbandon(b.id).catch(() => undefined);
-      else await store.aiCacheFail(b.id, err.kind).catch(() => undefined);
+      if (err.systemic) await store.aiCacheAbandon(lease).catch(() => undefined);
+      else await store.aiCacheFail(lease, err.kind).catch(() => undefined);
       throw err;
     }
     let stored = false;
     try {
-      stored = await store.aiCacheComplete(b.id, c.result, c.citations, c.usage);
+      stored = await store.aiCacheComplete(lease, c.result, c.citations, c.usage);
+      if (!stored) o.log?.warn('AI result not stored: the lease was lost to a newer holder (or the entry was already completed)', { task: key.task });
     } catch (e) {
       // The answer is valid and is still returned; it just is not reusable. The lease is released so the next run can store it.
       o.log?.warn('AI cache write failed', { task: key.task, error: safeError(e) });
-      await store.aiCacheAbandon(b.id).catch(() => undefined);
+      await store.aiCacheAbandon(lease).catch(() => undefined);
     }
-    return { status: 'computed', value: c.value, cacheId: b.id, stored };
+    return { status: 'computed', value: c.value, cacheId: lease.id, stored };
   }
   return { status: 'busy', cacheId: null };
 }

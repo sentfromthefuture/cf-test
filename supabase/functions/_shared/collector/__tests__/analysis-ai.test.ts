@@ -326,3 +326,32 @@ test('LFM3 is not used unless configured, and it never replaces Decisions or run
   assert.deepEqual(models, ['alpha/decisions parallel/decisions-fast:free', 'alpha/decisions parallel/decisions-fast:free', 'chat/completions liquid/lfm-3-1.7b:free']);
   assert.ok(both.calls.every((c) => /:free$/.test(c.body.model)), 'every request in the system targets an explicit free model');
 });
+
+// ------------------------------------------------------------------ cache first and severity isolation, end to end
+test('CACHE FIRST end to end: with the budget spent, queued records that are already cached still complete', async () => {
+  const store = await seeded(new MemoryStore(), 6); // r0..r5, queue order r0..r5
+  const net = scriptedHttp(() => decisionsBody());
+  // warm the cache for the LAST three records only (r3..r5), as an earlier run or an identical earlier post would have
+  const { classifyWithDecisions, newDecisionsRunState } = await import('../decisions-runner.ts');
+  const all = await store.claimPending(100);
+  await classifyWithDecisions({ cfg: decisionsCfg(net.http), store, records: all.filter((r) => ['r3', 'r4', 'r5'].some((x) => r.title!.includes(x))), state: newDecisionsRunState(), log: silentLog, timeLeftMs: () => 120_000 });
+  assert.equal(net.calls.length, 3);
+  const before = net.calls.length;
+
+  const stats = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http, { maxLivePerRun: 1 }) }));
+  assert.equal(net.calls.length - before, 1, 'one live request: the budget');
+  assert.equal(stats.analysed, 4, 'r0 live + r3, r4, r5 straight from the cache, although they sit behind records that could not be sent');
+  assert.equal(stats.decisions!.cacheHits, 3);
+  assert.equal(count(store, 'pending'), 2, 'only the two uncached records wait');
+  assert.equal(stats.failed, 0);
+  assert.equal(store.locks.size, 0);
+  assert.equal(stats.note, undefined, 'running out of budget is normal, not an error');
+});
+
+test('SEVERITY ISOLATION end to end: Decisions never writes a severity into dr_problem_signals, but keeps it in dr_signal_ai', async () => {
+  const store = await seeded(new MemoryStore(), 4);
+  const stats = await runAnalysis(deps(store, { decisions: decisionsCfg(scriptedHttp(() => decisionsBody()).http) }));
+  assert.equal(stats.problems, 4);
+  assert.ok([...store.signals.values()].every((s) => s.is_problem && s.severity === null), 'no AI severity in the demand data');
+  for (const row of store.signalAi.values()) assert.deepEqual((row.answers as any).severity, { value: 3, score: 2.4, confidence: 0.6 }, 'the estimate is preserved on its own row');
+});

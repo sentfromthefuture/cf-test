@@ -1,7 +1,7 @@
 import { ConnectorContext, HttpClient, consoleLogger, Logger } from '../types.ts';
 import { ClaimedSource, RunStats, Store, UpsertResult } from '../store.ts';
 import { PendingRecord, SignalOutput } from '../ai.ts';
-import type { AiCacheKey, AiTask, AiUsageCounters, CacheBegin } from '../ai-common.ts';
+import type { AiCacheKey, AiLease, AiTask, AiUsageCounters, CacheBegin } from '../ai-common.ts';
 import type { SignalAiRow } from '../decisions.ts';
 import { RawRecordInput } from '../types.ts';
 
@@ -108,7 +108,7 @@ export class MemoryStore implements Store {
   async saveClusterSummary(id: string, s: unknown) { this.summaries.set(id, s); }
   // ---- AI cache: in-memory mirror of the dr_ai_cache_* state machine (tested for real against Postgres in supabase/tests/30_ai_architecture.test.sql)
   clock: () => number = () => Date.now();
-  aiCache = new Map<string, { id: string; status: 'pending' | 'succeeded' | 'failed'; leaseUntil: number | null; result: Record<string, unknown> | null; citations: unknown[]; usage: Record<string, unknown>; hits: number; failedAttempts: number; retryAfter: number | null; lastFailure: string | null }>();
+  aiCache = new Map<string, { id: string; epoch: number; status: 'pending' | 'succeeded' | 'failed'; leaseUntil: number | null; result: Record<string, unknown> | null; citations: unknown[]; usage: Record<string, unknown>; hits: number; failedAttempts: number; retryAfter: number | null; lastFailure: string | null }>();
   aiCacheCalls = { begin: 0, complete: 0, fail: 0, abandon: 0, invalidate: 0 };
   failAiCache = false;
   aiUsage: Array<{ engine: AiTask; usage: AiUsageCounters }> = [];
@@ -126,35 +126,35 @@ export class MemoryStore implements Store {
     const e = this.aiCache.get(k);
     if (!e) {
       const id = `cache-${++this.cacheId}`;
-      this.aiCache.set(k, { id, status: 'pending', leaseUntil: lease, result: null, citations: [], usage: {}, hits: 0, failedAttempts: 0, retryAfter: null, lastFailure: null });
-      return { state: 'claimed', id };
+      this.aiCache.set(k, { id, epoch: 1, status: 'pending', leaseUntil: lease, result: null, citations: [], usage: {}, hits: 0, failedAttempts: 0, retryAfter: null, lastFailure: null });
+      return { state: 'claimed', id, epoch: 1 };
     }
     if (e.status === 'succeeded') { e.hits++; return { state: 'hit', id: e.id, result: e.result, citations: e.citations, usage: e.usage }; }
     if (e.status === 'failed' && e.retryAfter !== null && e.retryAfter > now) return { state: 'cooldown', id: e.id };
     if (e.status === 'pending' && e.leaseUntil !== null && e.leaseUntil > now) return { state: 'busy', id: e.id };
-    e.status = 'pending'; e.leaseUntil = lease;
-    return { state: 'claimed', id: e.id };
+    e.status = 'pending'; e.leaseUntil = lease; e.epoch++; // takeover moves the fencing epoch forward
+    return { state: 'claimed', id: e.id, epoch: e.epoch };
   }
-  async aiCacheComplete(id: string, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>) {
+  async aiCacheComplete(lease: AiLease, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>) {
     if (this.failAiCache) throw new Error('cache down');
     this.aiCacheCalls.complete++;
     if (result === null || typeof result !== 'object' || Array.isArray(result)) throw new Error('a successful AI result must be a non-null JSON object');
-    const f = this.cacheById(id);
-    if (!f || f.v.status !== 'pending') return false;
+    const f = this.cacheById(lease.id);
+    if (!f || f.v.status !== 'pending' || f.v.epoch !== lease.epoch) return false;
     Object.assign(f.v, { status: 'succeeded', result, citations, usage, leaseUntil: null, retryAfter: null, lastFailure: null });
     return true;
   }
-  async aiCacheFail(id: string, reason: string) {
+  async aiCacheFail(lease: AiLease, reason: string) {
     this.aiCacheCalls.fail++;
-    const f = this.cacheById(id);
-    if (!f || f.v.status !== 'pending') return;
+    const f = this.cacheById(lease.id);
+    if (!f || f.v.status !== 'pending' || f.v.epoch !== lease.epoch) return;
     f.v.retryAfter = this.clock() + Math.min(168, 2 ** Math.min(f.v.failedAttempts, 8)) * 3600_000;
     Object.assign(f.v, { status: 'failed', result: null, leaseUntil: null, failedAttempts: f.v.failedAttempts + 1, lastFailure: reason });
   }
-  async aiCacheAbandon(id: string) {
+  async aiCacheAbandon(lease: AiLease) {
     this.aiCacheCalls.abandon++;
-    const f = this.cacheById(id);
-    if (!f || f.v.status !== 'pending') return;
+    const f = this.cacheById(lease.id);
+    if (!f || f.v.status !== 'pending' || f.v.epoch !== lease.epoch) return;
     if (f.v.failedAttempts > 0) Object.assign(f.v, { status: 'failed', leaseUntil: null, retryAfter: this.clock() });
     else this.aiCache.delete(f.k);
   }

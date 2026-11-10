@@ -307,14 +307,14 @@ test('signals: threshold decides is_problem; method and model are recorded; no i
   assert.equal(yes.problem_statement, 'Need offline invoices');
   assert.equal(yes.signal_type, 'unmet_need');
   assert.equal(yes.industry, 'Hospitality & Food Ops');
-  assert.equal(yes.severity, 3);
+  assert.equal(yes.severity, null, 'the AI severity estimate never enters the demand-facing row (see the severity isolation tests)');
   assert.deepEqual(yes.competitors, [], 'the model cannot name competitors, so none are invented');
   assert.equal(yes.wtp_evidence, true);
   assert.ok(rec.excerpt!.includes(yes.wtp_quote!), 'the willingness-to-pay quote is a verbatim substring of the post');
   const no = decisionsToSignal(rec, result({ problemProbability: 0.49 }), mapCfg);
   assert.equal(no.is_problem, false);
   assert.equal(no.problem_statement, null);
-  assert.equal(no.severity, null, 'no severity for a non-problem');
+  assert.equal(no.severity, null);
   assert.equal(decisionsToSignal(rec, result({ problemProbability: 0.6 }), { ...mapCfg, minProblemProbability: 0.7 }).is_problem, false, 'configurable threshold');
 });
 
@@ -357,4 +357,35 @@ test('cached results are re-validated when read back', () => {
     assert.equal(reviveDecisionsResult(bad), null);
   }
   for (const junk of [null, undefined, 'x', 3, []]) assert.equal(reviveDecisionsResult(junk), null);
+});
+
+// ------------------------------------------------------------------ severity isolation
+test('SEVERITY ISOLATION: no model severity ever reaches the demand-facing signal row, whatever the value', () => {
+  for (const severity of [1, 2, 3, 4, 5, null]) {
+    for (const problemProbability of [0.99, 0.51, 0.1]) {
+      const sig = decisionsToSignal(pending('sev'), result({ severity, severityScore: severity === null ? null : severity - 1, problemProbability }), mapCfg);
+      assert.equal(sig.severity, null, `severity=${severity} p=${problemProbability}`);
+    }
+  }
+  const a = decisionsToSignal(pending('sev'), result({ severity: 1 }), mapCfg);
+  const b = decisionsToSignal(pending('sev'), result({ severity: 5 }), mapCfg);
+  assert.deepEqual(a, b, 'the strongest and weakest severity estimates produce byte-identical demand rows');
+});
+
+test('SEVERITY ISOLATION: the estimate is preserved in the model-output row, with its score and confidence', () => {
+  const r = parseDecisionsResponse(decisionsBody());
+  const row = decisionsToAiRow(pending('sev'), r, { model: 'parallel/decisions-fast:free', configVersion: 'decisions-v1' }, 'c1', 'h'.repeat(64));
+  assert.deepEqual((row.answers as any).severity, { value: 3, score: 2.4, confidence: 0.6 });
+  const refused = parseDecisionsResponse(decisionsBody({ answers: { severity: { type: 'refusal' } } }));
+  assert.deepEqual((decisionsToAiRow(pending('sev'), refused, { model: 'm:free', configVersion: 'v' }, null, 'h'.repeat(64)).answers as any).severity, { value: null, score: null, confidence: null });
+  assert.equal(parseDecisionsResponse(decisionsBody()).severity, 3, 'parsing and validation of the estimate are unchanged');
+});
+
+test('SEVERITY ISOLATION: Gemini keeps writing its severity exactly as before', async () => {
+  const { validateLlmResult } = await import('../ai.ts');
+  const rec = pending('g', { title: 'Invoices are painful', excerpt: 'We lose hours every week reconciling invoices by hand, it is awful.' });
+  const out = validateLlmResult(
+    { problem_statement: 'Reconciling invoices by hand wastes hours every week', is_problem: true, signal_type: 'complaint', industry: 'Finance & Accounting', severity: 4, competitors: [], wtp_evidence: false },
+    rec, 'gemini-test');
+  assert.equal(out?.severity, 4, 'the existing LLM path still sets the demand-facing severity');
 });

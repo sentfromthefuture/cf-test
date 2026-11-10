@@ -61,9 +61,9 @@ Source: OpenRouter's published OpenAPI page for the Decisions endpoint (marked *
 The separation is enforced and tested: the signal row built from a Decisions answer contains no confidence or probability at all, two different model confidences produce
 byte-identical signal rows, and changing `dr_signal_ai` and re-running `dr_refresh_clusters` leaves `composite_score` unchanged (`30_ai_architecture.test.sql`).
 
-One honest caveat: the Decisions **severity** answer (1–5) is stored in `dr_problem_signals.severity` exactly like Gemini's severity, so it feeds the existing `painIntensity`
-component (20 % weight, already labelled `ai_estimate`). Model *confidence* feeds nothing. If you would rather keep every AI-derived number out of the score, set severity to
-`null` for Decisions results – a one-line change in `decisionsToSignal`.
+**Severity isolation.** The Decisions **severity** answer (1–5) is **not** written to `dr_problem_signals.severity` (it is always `null` for Decisions-derived signals), because `dr_refresh_clusters` averages that column into the `painIntensity` component (20 % of `composite_score`). The estimate is preserved, with its score and confidence, in `dr_signal_ai.answers.severity`, and can be wired into scoring later **only on explicit approval**. A null severity is the same "no estimate" state keyword-analysed signals already have: the scorer's `avg()` ignores it, `painIntensity` shows `insufficient_data`, and the remaining weights are renormalised – it is never scored as zero. Gemini's severity path is unchanged, and a Decisions-derived signal joining a cluster of Gemini-derived ones does not change that cluster's severity average (all tested against the real scoring SQL).
+
+*One input to disclose, unchanged by this PR:* the scorer also has a `feasibility` component (10 %) taken from a cluster summary's `development_feasibility`. That existing mechanism applies to whichever engine writes the summary (Gemini, or LFM3 if enabled) – see §10.
 
 ## 4. Persistent caching (Supabase)
 
@@ -80,21 +80,21 @@ component (20 % weight, already labelled `ai_estimate`). Model *confidence* feed
 * **Invalidation rules** (the whole list): (1) the input changes → new hash; (2) a different model → new identity; (3) `DECISIONS_CONFIG_VERSION` / `SUMMARY_CONFIG_VERSION` is bumped in code when
   questions, prompts or parsing change; (4) operators can set `AI_CACHE_VERSION` to a new value to invalidate both caches **without a deploy**; (5) a stored result that no longer passes validation is
   dropped and recomputed once; (6) `dr_ai_cache_prune(days)` removes results unused for a long time, dead leases and old failures. Old entries are never overwritten, only bypassed.
-* **Concurrency**: `dr_ai_cache_begin` is one atomic statement sequence with a row lock. Proof: `supabase/tests/31_ai_cache_concurrency.sh` races 12 database sessions on one key – exactly 1 is told to compute.
-  (The analysis job lock already prevents overlapping runs; the lease also covers manual and future callers.)
+* **Lease fencing**: every lease carries a **fencing epoch** (`lease_epoch`, incremented each time a lease is issued, including a takeover of an expired lease or of a failed entry). `dr_ai_cache_complete`, `dr_ai_cache_fail` and `dr_ai_cache_abandon` require the epoch and act only while it is still the entry's current one, so a worker whose lease expired and was taken over can no longer store a result, mark the input failed, or release/delete the new holder's lease. It still gets its own (valid) answer back; it just is not stored. `dr_ai_cache_invalidate` stays an unfenced delete-by-id (used only to drop a stored result that no longer validates).
+* **Concurrency**: `dr_ai_cache_begin` is one atomic statement sequence with a row lock. Proof: `supabase/tests/31_ai_cache_concurrency.sh` runs three real multi-session scenarios (12 sessions each): a claim race (exactly 1 claims), a takeover race on an expired lease (exactly 1 takes over, with a newer epoch), and a burst of stale `complete`/`fail`/`abandon` calls racing the current holder (0 accepted; the holder's lease survives and its result is the one stored). (The analysis job lock already prevents overlapping runs; the lease and fencing also cover manual and future callers.)
 
 ## 5. Reliability, monitoring, cost control
 
 | Situation | Behaviour |
 |---|---|
-| HTTP 429 / 5xx / 524 / timeout / network / 401 / 402 / 403 / 404 | Engine switched off for the rest of the run. Records stay pending. Nothing marked failed. No other model or endpoint is tried. |
+| HTTP 429 / 5xx / 524 / timeout / network / 401 / 402 / 403 / 404 | **No further live requests** this run; that record stays pending. Nothing marked failed. No other model or endpoint is tried. **Records already in the cache are still served.** |
 | Unusable answer for one record | That record counts one attempt (3 attempts → `failed`), the input is cooled down; neighbours are unaffected. |
-| 3 unusable answers in a row | Engine stops for the run (probable API contract change). |
-| Live-request budget | `DECISIONS_MAX_PER_RUN` (default 20, max 100) live requests per run; **cache hits are free**; leftovers resume next run. |
-| Time budget | No new request starts with < 40 s left in the function's budget. |
+| 3 unusable answers in a row | No further live requests this run (probable API contract change); cached results are still served. |
+| Live-request budget | `DECISIONS_MAX_PER_RUN` (default 20, max 100) live requests per run. **The cache is always consulted first**: cached results are served even after the budget is spent, and the budget applies only to a cache *miss*; the rest of the misses are deferred (lease released, nothing recorded against them) and resume next run. |
+| Time budget | No new live request starts with < 40 s left in the function's budget – again only for a cache miss; cached results are still served. |
 | Retries | The shared HTTP client retries once (`retries: 1`, 30 s timeout) and honours `Retry-After`; the adapter never retries; nothing loops. |
 | Pacing | `DECISIONS_MIN_INTERVAL_MS` (3500) / `OPENROUTER_MIN_INTERVAL_MS` (1500) between calls. |
-| Cache unavailable | The engine refuses to spend requests (a request whose result cannot be reused is not made). |
+| Cache unavailable (the store itself fails) | The engine refuses to spend requests (a request whose result cannot be reused is not made) and leaves everything pending. |
 | Storing model outputs fails | Affected records stay pending; their answers are cached, so the retry costs nothing. |
 | Summaries (LFM3) | `OPENROUTER_MAX_SUMMARIES_PER_RUN` (default 2, max 5); first service-level failure stops them for the run. |
 
@@ -145,13 +145,14 @@ All TypeScript tests use **synthetic payloads shaped after the published schemas
 
 | File | Covers |
 |---|---|
-| `__tests__/decisions.test.ts` | endpoint and request construction, typed parsing, probability validation, missing/malformed fields, refusals, citations, API errors / timeouts / rate limits, config (disabled by default, free-only), signal mapping, AI confidence kept out of demand data |
-| `__tests__/ai-cache.test.ts` | persistence, reuse, hash consistency, model/config/task invalidation, concurrent duplicates, lease expiry, failures never stored as successes, cooldown growth, cache-write failure, corrupt entry |
-| `__tests__/decisions-runner.test.ts` | per-run budget, cache hits are free, circuit breaker, no fallback, cooldown, 3-in-a-row stop, busy records, time guard, metering |
+| `__tests__/decisions.test.ts` | endpoint and request construction, typed parsing, probability validation, missing/malformed fields, refusals, citations, API errors / timeouts / rate limits, config (disabled by default, free-only), signal mapping, AI confidence **and severity** kept out of demand data (Gemini severity unchanged) |
+| `__tests__/ai-cache.test.ts` | persistence, reuse, hash consistency, model/config/task invalidation, concurrent duplicates, lease expiry, **cache-first gate**, **lease fencing (stale worker cannot store, fail or release)**, failures never stored as successes, cooldown growth, cache-write failure, corrupt entry |
+| `__tests__/decisions-runner.test.ts` | per-run budget, **cached results served when the budget is spent / time is low / the breaker is open**, circuit breaker, no fallback, cooldown, 3-in-a-row stop, busy records, metering |
 | `__tests__/lfm3.test.ts` | config (paid default gone), request shape, reasoning-model output, invalid / truncated answers, API failures, summary caching |
 | `__tests__/analysis-ai.test.ts` | end to end through `runAnalysis`: caching across runs, separation, defaults off, test mode, every failure mode, **LFM3 failure never blocks core analysis** |
-| `supabase/tests/30_ai_architecture.test.sql` | cache state machine, invalidation identity, usage counters, `dr_save_signal_ai`, independent-report de-duplication, persistence, trend, external evidence, AI/demand separation, lock-down |
-| `supabase/tests/31_ai_cache_concurrency.sh` | 12 concurrent sessions, exactly one claim |
+| `supabase/tests/30_ai_architecture.test.sql` | cache state machine, **lease fencing**, invalidation identity, usage counters, `dr_save_signal_ai`, independent-report de-duplication, persistence, trend, external evidence, AI/demand separation, **severity isolation against the real scorer**, lock-down |
+| `supabase/tests/31_ai_cache_concurrency.sh` | three real multi-session scenarios (12 sessions): claim race, takeover race, stale-holder burst vs the current holder |
+| `__tests__/store-ai-contract.test.ts` | the TypeScript→SQL contract: every RPC `SupabaseStore` makes names a real function in the migration, sends only declared parameters, omits no required one, and always sends the fencing epoch |
 
 Run: `bun run lint && bun run build && bun run test:collector`. SQL (plain Postgres 16 + pgvector + pg_trgm, **disposable database only**): apply `00_stub_supabase.sql`, the migrations, then each `supabase/tests/*.test.sql`,
 and `bash supabase/tests/31_ai_cache_concurrency.sh <db>`.
@@ -163,7 +164,7 @@ and `bash supabase/tests/31_ai_cache_concurrency.sh <db>`.
 **Deploy – only after you approve, in this order:**
 1. Merge the PR. **Merging deploys the `collect` function automatically** (`.github/workflows/deploy-collector.yml` runs on pushes to `main` that touch `supabase/functions/**`). With both engines off this changes no behaviour, and no new database function is called.
 2. Supabase dashboard → SQL editor: run `supabase/migrations/20261109000000_ai_results_cache.sql`. It only creates new objects, is safe to run twice, and touches no existing table, column or function.
-   *(Running it before step 1 is equally safe and is the preferred order.)*
+   *(Running it before step 1 is equally safe and is the preferred order.)* The file is also an **upgrade** of the first revision of this migration (PR head `75a84c3`): if that revision was ever applied anywhere, this adds the `lease_epoch` column and removes only that revision's three superseded, unfenced function signatures; existing cache rows are kept (verified locally).
 3. Verify with a read-only query: `select count(*) from dr_ai_cache;` returns `0`.
 4. To switch on, one engine at a time, in Edge Functions → Secrets: set `OPENROUTER_API_KEY`, then `DECISIONS_ENABLED=true` (optionally lower `DECISIONS_MAX_PER_RUN` for the first run). Leave `OPENROUTER_ENABLED=false` while evaluating Engine A.
 5. There is **no Decisions-only dry run**: `analysis_test` is heuristic-only by design and cannot reach any AI. The first real exercise is a normal manual sync from the Data Sources tab with `DECISIONS_MAX_PER_RUN=3` – it collects from the sources as usual (production writes) and spends at most 3 free-tier requests. Do this only when you decide to.
@@ -182,9 +183,11 @@ and `bash supabase/tests/31_ai_cache_concurrency.sh <db>`.
 5. **No automatic fallback to Gemini** when Decisions is down (it would be an unrequested model switch). Records wait. If Gemini is also configured it still produces embeddings (and summaries when OpenRouter is off) exactly as before – and Gemini may be a paid product; that is existing behaviour and out of scope here.
 6. **Persistence / independent reports are not in `composite_score`.** Changing `dr_refresh_clusters` would re-rank existing production clusters on the next refresh, so it was deliberately not touched. `dr_cluster_profile` provides the measures; folding persistence into the score is a recommended follow-up that needs your approval.
 7. **`analysis_method` is `'llm'` for Decisions results** (the column only allows `llm`/`heuristic`; no schema change was made). The `model` column carries the slug and `dr_signal_ai` carries the exact served build.
-8. **Severity from Decisions feeds the existing `painIntensity` component** like Gemini's (see §3). Decide whether to keep it.
+8. **Severity isolation (resolved; wiring needs approval).** Decisions severity no longer reaches `dr_problem_signals` or `composite_score`; it is preserved in `dr_signal_ai`. Feeding it into scoring is a deliberate future step that needs your approval.
+8b. **Another AI estimate already feeds the score, unchanged by this PR:** a cluster summary's `development_feasibility` (10 % `feasibility` component, labelled `ai_estimate`) is taken from whichever engine wrote the summary – Gemini or, if you enable it, LFM3 (a 1.7B model). If you want LFM3 summaries to be display-only, that is a small follow-up (e.g. store its feasibility outside `summary.development_feasibility`); it was not changed here because it was outside this review's scope.
 9. **Privacy of free variants** (§7) needs your confirmation.
 10. **Testing environment.** SQL tests ran on local PostgreSQL 16 + pgvector 0.6 + pg_trgm, not on Supabase's exact build. Two older billing migrations (`brief_reservations`, `dodo_webhook_ordering`) were not applied locally because they need Supabase-managed `auth.users` / existing billing tables; they are unrelated and unchanged.
 11. **CI does not run the SQL tests** (and no workflow was modified). Adding a Postgres job is a sensible follow-up.
-12. **`reanalyse` and a per-run cap interact badly** (see deploy step 5). A follow-up could make `reanalyse` skip requeueing when Decisions is enabled, or requeue in capped slices.
-13. **No UI** shows `dr_cluster_profile`, `dr_ai_usage` or citations yet.
+12. **Cosmetic:** `stats.claimed` counts every claim, so a deferred record seen again in the extra pass that serves remaining cache hits is counted twice. It has no effect on processing.
+13. **`reanalyse` and a per-run cap interact badly** (see deploy step 5). A follow-up could make `reanalyse` skip requeueing when Decisions is enabled, or requeue in capped slices.
+14. **No UI** shows `dr_cluster_profile`, `dr_ai_usage` or citations yet.

@@ -1,6 +1,6 @@
 import { RawRecordInput } from './types.ts';
 import { SignalOutput, PendingRecord } from './ai.ts';
-import type { AiCacheKey, AiCacheStore, AiTask, AiUsageCounters, CacheBegin } from './ai-common.ts';
+import type { AiCacheKey, AiCacheStore, AiLease, AiTask, AiUsageCounters, CacheBegin } from './ai-common.ts';
 import type { SignalAiRow } from './decisions.ts';
 import { sleep } from './util.ts';
 
@@ -168,13 +168,14 @@ export class SupabaseStore implements Store {
   async aiCacheBegin(key: AiCacheKey, leaseSeconds: number): Promise<CacheBegin> {
     const r = await this.rpc<CacheBegin>('dr_ai_cache_begin', { p_task: key.task, p_hash: key.hash, p_model: key.model, p_version: key.configVersion, p_lease_seconds: leaseSeconds });
     if (!r || typeof r !== 'object' || !['hit', 'claimed', 'busy', 'cooldown'].includes((r as { state?: string }).state ?? '')) throw new Error('dr_ai_cache_begin returned an unexpected value');
+    if (r.state === 'claimed' && !(typeof r.id === 'string' && typeof r.epoch === 'number' && Number.isFinite(r.epoch))) throw new Error('dr_ai_cache_begin returned a lease without a fencing epoch');
     return r;
   }
-  async aiCacheComplete(id: string, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>): Promise<boolean> {
-    return (await this.rpc<boolean>('dr_ai_cache_complete', { p_id: id, p_result: result, p_citations: citations, p_usage: usage })) === true;
+  async aiCacheComplete(lease: AiLease, result: Record<string, unknown>, citations: unknown[], usage: Record<string, unknown>): Promise<boolean> {
+    return (await this.rpc<boolean>('dr_ai_cache_complete', { p_id: lease.id, p_epoch: lease.epoch, p_result: result, p_citations: citations, p_usage: usage })) === true;
   }
-  async aiCacheFail(id: string, reason: string) { await this.rpc('dr_ai_cache_fail', { p_id: id, p_reason: reason }); }
-  async aiCacheAbandon(id: string) { await this.rpc('dr_ai_cache_abandon', { p_id: id }); }
+  async aiCacheFail(lease: AiLease, reason: string) { await this.rpc('dr_ai_cache_fail', { p_id: lease.id, p_epoch: lease.epoch, p_reason: reason }); }
+  async aiCacheAbandon(lease: AiLease) { await this.rpc('dr_ai_cache_abandon', { p_id: lease.id, p_epoch: lease.epoch }); }
   async aiCacheInvalidate(id: string) { await this.rpc('dr_ai_cache_invalidate', { p_id: id }); }
   async aiNoteUsage(engine: AiTask, usage: AiUsageCounters) { await this.rpc('dr_ai_note_usage', { p_engine: engine, p_counters: usage }); }
   async saveSignalAi(rows: SignalAiRow[]): Promise<number> {

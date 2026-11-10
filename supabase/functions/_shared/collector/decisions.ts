@@ -320,7 +320,15 @@ export async function callDecisions(cfg: DecisionsConfig, rec: PendingRecord): P
 
 // ------------------------------------------------------------------------------------------------ mapping onto existing signal rows
 
-/** A post only counts as a problem if the model says so AND we can state the problem from the post itself (the model returns no prose). */
+/**
+ * A post only counts as a problem if the model says so AND we can state the problem from the post itself (the model returns no prose).
+ *
+ * SEVERITY ISOLATION: the model's severity estimate is deliberately NOT written to the demand-facing row (`severity` is always null here).
+ * dr_refresh_clusters averages `dr_problem_signals.severity` into the painIntensity component of composite_score, so putting an AI estimate
+ * there would let the new engine move rankings. The estimate is preserved in `dr_signal_ai.answers.severity` (see decisionsToAiRow) and
+ * can be wired into scoring later, but only on explicit approval. Gemini's severity path is unchanged. A null severity is the same
+ * "no estimate" state keyword-analysed signals already have, which the scorer excludes rather than guesses.
+ */
 export function decisionsToSignal(rec: PendingRecord, r: DecisionsResult, cfg: Pick<DecisionsConfig, 'model' | 'minProblemProbability'>): SignalOutput {
   const text = `${rec.title ?? ''}\n${rec.excerpt ?? ''}`.trim();
   const statement = [cleanStatement(rec.title ?? ''), cleanStatement(text)].find((s) => s.length >= 10) ?? null;
@@ -336,7 +344,7 @@ export function decisionsToSignal(rec: PendingRecord, r: DecisionsResult, cfg: P
     problem_statement: isProblem ? statement : null,
     industry: r.industry ?? guessIndustry(text),
     use_case: null,
-    severity: isProblem ? r.severity : null,
+    severity: null, // see SEVERITY ISOLATION above: kept in dr_signal_ai, never in the demand row
     wtp_evidence: !!wtp,
     wtp_quote: wtp,
     competitors: [],
