@@ -85,7 +85,7 @@ export default function App() {
     };
     const sync = async (uid?: string, accessToken?: string) => {
       setSignedIn(!!uid);
-      if (uid) navigateToTab((tab) => tab === 'landing' ? 'dashboard' : tab);
+      if (uid) setTabState((tab) => tab === 'landing' ? 'dashboard' : tab);
       let plan = await load(accessToken);
       const returning = new URLSearchParams(window.location.search).has('checkout');
       for (let i = 0; uid && accessToken && returning && plan === 'Free' && i < 10; i++) {
@@ -191,7 +191,7 @@ export default function App() {
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}
-        setCurrentTab={setCurrentTab}
+        setCurrentTab={navigateToTab}
         activePlan={activePlan}
         onOpenPricing={() => setIsPricingOpen(true)}
         onOpenScoring={() => openScoring()}
