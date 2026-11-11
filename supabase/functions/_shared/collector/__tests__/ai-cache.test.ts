@@ -303,3 +303,33 @@ test('a failing cache store surfaces as AiCacheError, never as a model failure',
   await assert.rejects(cachedCompute(store, key(), compute, revive), (e: AiCallError) => e instanceof AiCacheError && e.systemic);
   assert.equal(state.n, 0, 'no model call without a working cache');
 });
+
+test('a valid answer that could not be made durable says so, and why', async () => {
+  class WriteFails extends MemoryStore { async aiCacheComplete(): Promise<boolean> { throw new Error('write failed'); } }
+  const { compute } = counted();
+  const w = await cachedCompute(new WriteFails(), key(), compute, revive, { log: silentLog });
+  assert.equal(w.status, 'computed');
+  assert.deepEqual(w.status === 'computed' && { stored: w.stored, why: w.notStored }, { stored: false, why: 'write_failed' });
+
+  class LeaseLost extends MemoryStore { async aiCacheComplete(): Promise<boolean> { return false; } }
+  const l = await cachedCompute(new LeaseLost(), key(), compute, revive, { log: silentLog });
+  assert.deepEqual(l.status === 'computed' && { stored: l.stored, why: l.notStored }, { stored: false, why: 'lease_lost' });
+
+  const ok = await cachedCompute(new MemoryStore(), key(), compute, revive);
+  assert.deepEqual(ok.status === 'computed' && { stored: ok.stored, why: ok.notStored }, { stored: true, why: undefined }, 'a durable answer carries no reason');
+});
+
+test('invalidate can remove only a stored result, never a pending lease or a failure record', async () => {
+  const store = new MemoryStore();
+  const b = await store.aiCacheBegin(key(), 120) as { id: string; epoch: number };
+  await store.aiCacheInvalidate(b.id);
+  assert.equal(store.aiCache.size, 1, 'a pending lease survives invalidate');
+  await store.aiCacheFail({ id: b.id, epoch: b.epoch }, 'invalid_response');
+  await store.aiCacheInvalidate(b.id);
+  assert.equal([...store.aiCache.values()][0].status, 'failed', 'a failure record (with its cooldown) survives invalidate');
+  const store2 = new MemoryStore();
+  const c = await store2.aiCacheBegin(key(), 120) as { id: string; epoch: number };
+  await store2.aiCacheComplete({ id: c.id, epoch: c.epoch }, { ok: 1 }, [], {});
+  await store2.aiCacheInvalidate(c.id);
+  assert.equal(store2.aiCache.size, 0, 'a stored result can be invalidated');
+});

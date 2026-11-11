@@ -106,6 +106,15 @@ begin
   update public.dr_ai_cache set lease_until = now() - interval '1 second' where id = (b->>'id')::uuid;
   assert public.dr_ai_cache_begin('decisions', pg_temp.h('crash'), 'm', 'v1')->>'state' = 'claimed', 'expired lease is taken over';
 
+  -- invalidate can remove only a STORED result: never a pending lease, never a failure record
+  b := public.dr_ai_cache_begin('decisions', pg_temp.h('inv'), 'm', 'v1');
+  perform public.dr_ai_cache_invalidate((b->>'id')::uuid);
+  assert exists (select 1 from public.dr_ai_cache where id = (b->>'id')::uuid and status = 'pending'), 'invalidate must not delete a pending lease';
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('inv'), 'm', 'v1')->>'state' = 'busy', 'the lease is intact';
+  assert public.dr_ai_cache_fail((b->>'id')::uuid, (b->>'epoch')::bigint, 'invalid_response');
+  perform public.dr_ai_cache_invalidate((b->>'id')::uuid);
+  assert exists (select 1 from public.dr_ai_cache where id = (b->>'id')::uuid and status = 'failed'), 'invalidate must not delete a failure record (it carries the cooldown)';
+
   -- corrupt/obsolete stored result can be dropped so it is recomputed once
   perform public.dr_ai_cache_invalidate(id1);
   assert public.dr_ai_cache_begin('decisions', pg_temp.h('a'), 'parallel/decisions-fast:free', 'v1')->>'state' = 'claimed', 'invalidate -> recompute';
@@ -263,6 +272,19 @@ begin
     jsonb_build_object('record_id', (select id from public.dr_raw_records where source_record_id = 'g1'), 'content_hash', 'h-g1', 'problem_probability', 0.9, 'model_confidence', -0.1, 'config_version', 'v1'))) = 0,
     'stale or out-of-range rows are not saved';
 
+  -- a provenance row whose cache entry vanished is saved with a NULL link instead of failing the whole call
+  declare ghost uuid := gen_random_uuid(); real_entry jsonb := public.dr_ai_cache_begin('decisions', pg_temp.h('prov'), 'm', 'v1');
+  begin
+    perform public.dr_ai_cache_complete((real_entry->>'id')::uuid, (real_entry->>'epoch')::bigint, '{"ok":1}'::jsonb);
+    assert public.dr_save_signal_ai(jsonb_build_array(
+      jsonb_build_object('record_id', (select id from public.dr_raw_records where source_record_id = 'g4'), 'content_hash', 'h-g4', 'problem_probability', 0.7, 'config_version', 'v1', 'cache_id', real_entry->>'id'),
+      jsonb_build_object('record_id', (select id from public.dr_raw_records where source_record_id = 'g5'), 'content_hash', 'h-g5', 'problem_probability', 0.7, 'config_version', 'v1', 'cache_id', ghost::text))) = 2,
+      'one dangling cache link must not cost the other rows (or itself) their provenance';
+    assert (select cache_id from public.dr_signal_ai where record_id = (select id from public.dr_raw_records where source_record_id = 'g4')) = (real_entry->>'id')::uuid, 'a real link is kept';
+    assert (select cache_id from public.dr_signal_ai where record_id = (select id from public.dr_raw_records where source_record_id = 'g5')) is null, 'a vanished link is stored as NULL';
+    delete from public.dr_signal_ai where record_id in (select id from public.dr_raw_records where source_record_id in ('g4', 'g5'));
+  end;
+
   comp_before := (select composite_score from public.dr_clusters where id = c1);
   assert comp_before is not null, 'demand score exists';
   n := public.dr_save_signal_ai(jsonb_build_array(
@@ -364,6 +386,41 @@ begin
   assert not has_function_privilege('anon', 'public.dr_cluster_profile(uuid)', 'execute') and not has_function_privilege('authenticated', 'public.dr_ai_cache_begin(text,text,text,text,integer)', 'execute'), 'AI functions not callable by browser roles';
   assert has_function_privilege('service_role', 'public.dr_ai_cache_begin(text,text,text,text,integer)', 'execute'), 'collector can use them';
   assert has_function_privilege('service_role', 'public.dr_ai_cache_complete(uuid,bigint,jsonb,jsonb,jsonb)', 'execute') and not has_function_privilege('authenticated', 'public.dr_ai_cache_abandon(uuid,bigint)', 'execute'), 'fenced functions are service_role only';
+end $$;
+
+-- Grants are checked by EXECUTING each new function as each browser-facing role, not only by looking at the privilege tables:
+-- anon and authenticated must be refused, service_role must be allowed. (Arguments are valid but harmless; every call is rolled back.)
+do $$
+declare
+  z constant text := '00000000-0000-0000-0000-000000000000';
+  calls text[] := array[
+    format('select public.dr_ai_cache_begin(%L, %L, %L, %L)', 'decisions', repeat('a', 64), 'm', 'v'),
+    format('select public.dr_ai_cache_complete(%L::uuid, 1, %L::jsonb)', z, '{"x":1}'),
+    format('select public.dr_ai_cache_fail(%L::uuid, 1)', z),
+    format('select public.dr_ai_cache_abandon(%L::uuid, 1)', z),
+    format('select public.dr_ai_cache_invalidate(%L::uuid)', z),
+    'select public.dr_ai_cache_prune(365)',
+    format('select public.dr_ai_note_usage(%L, %L::jsonb)', 'decisions', '{}'),
+    'select public.dr_save_signal_ai(''[]''::jsonb)',
+    'select public.dr_norm_url(''https://www.example.org/a'')',
+    format('select public.dr_cluster_profile(%L::uuid)', z)];
+  c text; r text;
+begin
+  foreach c in array calls loop
+    foreach r in array array['anon', 'authenticated'] loop
+      begin
+        execute format('set local role %I', r);
+        execute c;
+        execute 'reset role';
+        raise exception 'GRANT BREACH: role % could execute: %', r, c using errcode = 'P0001';
+      exception when insufficient_privilege then
+        null;   -- expected: permission denied for function
+      end;
+    end loop;
+    execute 'set local role service_role';
+    execute c;
+    execute 'reset role';
+  end loop;
 end $$;
 
 rollback;

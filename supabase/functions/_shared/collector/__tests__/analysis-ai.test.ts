@@ -42,7 +42,7 @@ test('Decisions: records are classified, saved, model outputs stored apart, usag
   assert.equal(stats.analysed, 4);
   assert.equal(stats.problems, 4);
   assert.equal(stats.failed, 0);
-  assert.deepEqual(stats.decisions, { liveCalls: 4, cacheHits: 0, busy: 0, cooldown: 0, invalid: 0, deferred: 0, stopped: null });
+  assert.deepEqual(stats.decisions, { liveCalls: 4, cacheHits: 0, busy: 0, cooldown: 0, invalid: 0, deferred: 0, unstored: 0, stopped: null });
   assert.equal(count(store, 'done'), 4);
   assert.ok([...store.signals.values()].every((s) => s.analysis_method === 'llm' && s.model === 'parallel/decisions-fast:free'));
   assert.equal(store.signalAi.size, 4);
@@ -354,4 +354,78 @@ test('SEVERITY ISOLATION end to end: Decisions never writes a severity into dr_p
   assert.equal(stats.problems, 4);
   assert.ok([...store.signals.values()].every((s) => s.is_problem && s.severity === null), 'no AI severity in the demand data');
   for (const row of store.signalAi.values()) assert.deepEqual((row.answers as any).severity, { value: 3, score: 2.4, confidence: 0.6 }, 'the estimate is preserved on its own row');
+});
+
+// ------------------------------------------------------------------ DURABILITY: a record is never done without durable provenance
+const provenanceIsDurable = (store: MemoryStore) => {
+  const byId = new Map([...store.aiCache.values()].map((e) => [e.id, e]));
+  return [...store.signalAi.values()].every((r) => r.cache_id !== null && byId.get(r.cache_id)?.status === 'succeeded' && byId.get(r.cache_id)?.result !== null);
+};
+
+test('DURABILITY: if the cache write fails after a valid answer, nothing is persisted and the record stays pending', async () => {
+  class WriteFails extends MemoryStore { broken = true; async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (this.broken) throw new Error('db hiccup'); return super.aiCacheComplete(l, r, c, u); } }
+  const store = await seeded(new WriteFails(), 3);
+  const net = scriptedHttp(() => decisionsBody());
+  const s1 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(s1.analysed, 0, 'no record was marked done');
+  assert.equal(count(store, 'pending'), 3, 'all three are still pending');
+  assert.equal(store.signals.size, 0, 'no signal was persisted');
+  assert.equal(store.signalAi.size, 0, 'and no provenance row pointing at nothing');
+  assert.equal(net.calls.length, 1, 'spending stops after the first answer that cannot be kept (not one wasted request per record)');
+  assert.equal(s1.decisions!.unstored, 1);
+  assert.match(s1.decisions!.stopped!, /cache write failed/);
+  assert.equal(s1.failed, 0, 'a cache problem is never held against the record');
+  assert.ok([...store.records.values()].every((r) => r.attempts === 0));
+  assert.equal(store.locks.size, 0);
+
+  store.broken = false; // the database recovers
+  const s2 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(s2.analysed, 3, 'the next run completes every record');
+  assert.equal(net.calls.length, 4, 'safe retry: one live request per record, none repeated');
+  assert.equal(store.signalAi.size, 3);
+  assert.ok(provenanceIsDurable(store), 'every provenance row links to a stored, non-empty cache entry');
+});
+
+test('DURABILITY: if another worker holds the newer lease, only that record waits and it recovers from the cache', async () => {
+  class LostLease extends MemoryStore {
+    first = true;
+    async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> {
+      if (this.first) {
+        this.first = false;
+        // another worker took over with a newer epoch and stored ITS answer; ours is fenced out
+        const e = [...this.aiCache.values()].find((x) => x.id === l.id)!;
+        Object.assign(e, { epoch: e.epoch + 1, status: 'succeeded', result: r, citations: c, usage: u, leaseUntil: null });
+        return false;
+      }
+      return super.aiCacheComplete(l, r, c, u);
+    }
+  }
+  const store = await seeded(new LostLease(), 3);
+  const net = scriptedHttp(() => decisionsBody());
+  const s1 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(s1.analysed, 2, 'the two records whose answers were durably stored are done');
+  assert.equal(count(store, 'pending'), 1, 'the record whose lease was lost waits');
+  assert.equal(s1.decisions!.unstored, 1);
+  assert.equal(s1.decisions!.stopped, null, 'losing one lease is not a reason to stop the engine');
+  assert.equal(s1.failed, 0);
+  assert.ok(provenanceIsDurable(store), 'no provenance row was saved for the unstored answer');
+  const callsAfterFirst = net.calls.length;
+  const s2 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(net.calls.length, callsAfterFirst, 'recovered from the cache: the other worker\'s stored answer, no new request');
+  assert.equal(s2.analysed, 1);
+  assert.equal(s2.decisions!.cacheHits, 1);
+  assert.equal(count(store, 'done'), 3);
+  assert.ok(provenanceIsDurable(store));
+});
+
+test('DURABILITY: a lost lease on a stale worker never blocks its neighbours or marks anything failed', async () => {
+  class AlwaysLost extends MemoryStore { async aiCacheComplete(): Promise<boolean> { return false; } }
+  const store = await seeded(new AlwaysLost(), 4);
+  const net = scriptedHttp(() => decisionsBody());
+  const s = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(s.analysed, 0);
+  assert.equal(count(store, 'pending'), 4);
+  assert.equal(s.failed, 0);
+  assert.equal(store.signalAi.size, 0, 'no provenance without a durable cache entry');
+  assert.equal(store.locks.size, 0);
 });

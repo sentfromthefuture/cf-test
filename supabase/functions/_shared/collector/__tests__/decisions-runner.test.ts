@@ -304,3 +304,32 @@ test('CACHE FIRST: an already-deferred record is not looked up again within the 
   assert.equal(again.out.leftPending, 1);
   assert.equal(state.deferred, 1, 'counted once, not once per batch');
 });
+
+// ------------------------------------------------------------------ DURABILITY at the runner
+test('DURABILITY: a valid answer that was not stored yields no signal and no provenance, and stops spending', async () => {
+  class WriteFails extends MemoryStore { async aiCacheComplete(): Promise<boolean> { throw new Error('db hiccup'); } }
+  const store = new WriteFails();
+  const net = scriptedHttp(() => decisionsBody());
+  const { out, state } = await run(store, cfgFor(net.http), recs(4));
+  assert.equal(net.calls.length, 1, 'the second record is not sent: an answer that cannot be kept is wasted');
+  assert.equal(out.signals.length, 0);
+  assert.equal(out.aiRows.length, 0, 'no provenance row for an answer that is not durable');
+  assert.deepEqual(out.failedIds, [], 'not the record\'s fault');
+  assert.equal(out.leftPending, 4);
+  assert.equal(state.unstored, 1);
+  assert.equal(state.stopped, 'cache write failed');
+  assert.equal(state.usage.successes, 1, 'the request itself succeeded and is metered as such');
+});
+
+test('DURABILITY: a lost lease defers only that record; the engine keeps working for the others', async () => {
+  class LostFirst extends MemoryStore { first = true; async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (this.first) { this.first = false; return false; } return super.aiCacheComplete(l, r, c, u); } }
+  const net = scriptedHttp(() => decisionsBody());
+  const { out, state } = await run(new LostFirst(), cfgFor(net.http), recs(3));
+  assert.equal(net.calls.length, 3);
+  assert.equal(out.signals.length, 2);
+  assert.equal(out.aiRows.length, 2);
+  assert.equal(out.leftPending, 1);
+  assert.equal(state.unstored, 1);
+  assert.equal(state.stopped, null);
+  assert.ok(out.aiRows.every((r) => r.cache_id), 'every emitted provenance row has a cache entry behind it');
+});

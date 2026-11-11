@@ -9,6 +9,7 @@
 //    rest of the run and leaves those records PENDING - nothing is marked failed, nothing falls back to another model;
 //  - input-level failures (invalid/refused/rejected) count as a failed attempt for that record, are recorded with a growing cooldown
 //    (never stored as results), and are not re-sent until the cooldown ends;
+//  - a live answer is turned into a signal + provenance row ONLY once it is durable in the cache; otherwise the record stays pending;
 //  - the model's numbers go to SignalAiRow (dr_signal_ai) and never into the demand data.
 import { PendingRecord, SignalOutput } from './ai.ts';
 import { AiCacheError, AiCacheStore, AiCallError, AiUsageCounters, cachedCompute, classifyAiFailure, emptyAiUsage, meteredCall } from './ai-common.ts';
@@ -30,10 +31,12 @@ export interface DecisionsRunState {
   deferred: number;
   /** Ids counted in `deferred`; lets later batches skip them without another cache round trip. */
   deferredIds: Set<string>;
+  /** Live answers that were valid but could not be made durable in the cache. Their records stay pending (see below). */
+  unstored: number;
 }
 
 export const newDecisionsRunState = (): DecisionsRunState => ({
-  usage: emptyAiUsage(), liveCalls: 0, consecutiveInputFailures: 0, stopped: null, cacheHits: 0, busy: 0, cooldown: 0, invalid: 0, deferred: 0, deferredIds: new Set<string>(),
+  usage: emptyAiUsage(), liveCalls: 0, consecutiveInputFailures: 0, stopped: null, cacheHits: 0, busy: 0, cooldown: 0, invalid: 0, deferred: 0, deferredIds: new Set<string>(), unstored: 0,
 });
 
 export interface DecisionsBatchResult {
@@ -95,6 +98,17 @@ export async function classifyWithDecisions(o: {
         // being burned in this run. Only real failures count towards the record's three attempts.
         if (outcome.status === 'busy') state.busy++; else state.cooldown++;
         out.leftPending++;
+        continue;
+      }
+      if (outcome.status === 'computed' && !outcome.stored) {
+        // A valid live answer that is NOT durable in the cache. The signal and its provenance row link to that cache entry, so persisting
+        // them now would mark the record done with provenance pointing at nothing (cache write failed) or at someone else's unfinished
+        // entry (lease lost). Instead the record stays pending: next run it is served from the cache if another worker stored it, or retried.
+        // If the cache WRITE itself is failing, stop spending live requests this run (an answer that cannot be kept is wasted).
+        state.unstored++;
+        defer(rec.id);
+        if (outcome.notStored === 'write_failed') state.stopped ??= 'cache write failed';
+        log.warn('Decisions answer not made durable; record stays pending', { reason: outcome.notStored });
         continue;
       }
       if (outcome.status === 'hit') { state.cacheHits++; state.usage.cache_hits++; }

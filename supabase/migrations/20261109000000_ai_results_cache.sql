@@ -189,9 +189,10 @@ begin
 end $$;
 
 -- A stored result that no longer passes application validation (e.g. schema drift): remove it so it is recomputed once.
+-- It can only ever remove a SUCCEEDED entry, so no caller (stale or not) can delete a pending lease or a failure record.
 create or replace function public.dr_ai_cache_invalidate(p_id uuid)
 returns void language sql security definer set search_path = public, extensions as $$
-  delete from public.dr_ai_cache where id = p_id;
+  delete from public.dr_ai_cache where id = p_id and status = 'succeeded';
 $$;
 
 -- Housekeeping for scheduled/manual use: drops results nobody has used for a long time, long-dead leases and old failures.
@@ -236,9 +237,11 @@ end $$;
 
 -- ================================================================= per-signal model outputs
 -- Rows whose record changed since analysis (content_hash mismatch) or whose probabilities are out of range are ignored.
+-- A cache_id that no longer exists (entry invalidated or pruned in between) is stored as NULL instead of raising a foreign-key
+-- error, so one stale link can never make the whole call lose every other row's provenance.
 create or replace function public.dr_save_signal_ai(p_rows jsonb)
 returns integer language plpgsql security definer set search_path = public, extensions as $$
-declare n integer := 0; s jsonb; v_p numeric; v_c numeric;
+declare n integer := 0; s jsonb; v_p numeric; v_c numeric; v_cache uuid;
 begin
   for s in select * from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) loop
     if not exists (select 1 from public.dr_raw_records r
@@ -248,9 +251,11 @@ begin
     v_p := (s->>'problem_probability')::numeric;
     v_c := nullif(s->>'model_confidence', '')::numeric;
     if v_p is null or v_p < 0 or v_p > 1 or (v_c is not null and (v_c < 0 or v_c > 1)) then continue; end if;
+    v_cache := nullif(s->>'cache_id', '')::uuid;
+    if v_cache is not null and not exists (select 1 from public.dr_ai_cache where id = v_cache) then v_cache := null; end if;
     insert into public.dr_signal_ai as g (record_id, cache_id, input_hash, model, requested_model, config_version,
                                           problem_probability, model_confidence, answers, citations)
-    values ((s->>'record_id')::uuid, nullif(s->>'cache_id', '')::uuid, left(s->>'input_hash', 64), left(s->>'model', 120),
+    values ((s->>'record_id')::uuid, v_cache, left(s->>'input_hash', 64), left(s->>'model', 120),
             left(s->>'requested_model', 120), left(coalesce(s->>'config_version', 'unknown'), 80), v_p, v_c,
             case when jsonb_typeof(s->'answers') = 'object' then s->'answers' else '{}'::jsonb end,
             case when jsonb_typeof(s->'citations') = 'array' then s->'citations' else '[]'::jsonb end)

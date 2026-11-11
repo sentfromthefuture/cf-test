@@ -158,7 +158,7 @@ export class MemoryStore implements Store {
     if (f.v.failedAttempts > 0) Object.assign(f.v, { status: 'failed', leaseUntil: null, retryAfter: this.clock() });
     else this.aiCache.delete(f.k);
   }
-  async aiCacheInvalidate(id: string) { this.aiCacheCalls.invalidate++; const f = this.cacheById(id); if (f) this.aiCache.delete(f.k); }
+  async aiCacheInvalidate(id: string) { this.aiCacheCalls.invalidate++; const f = this.cacheById(id); if (f && f.v.status === 'succeeded') this.aiCache.delete(f.k); } // mirrors the SQL: only a stored result can be invalidated
   async aiNoteUsage(engine: AiTask, usage: AiUsageCounters) { if (this.failAiUsage) throw new Error('usage table down'); this.aiUsage.push({ engine, usage: { ...usage } }); }
   async saveSignalAi(rows: SignalAiRow[]) {
     let n = 0;

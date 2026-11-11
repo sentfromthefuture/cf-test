@@ -25,7 +25,7 @@ export interface AnalysisStats {
   summaries: number;
   note?: string;
   /** Present only when the Decisions engine is configured. Counts live requests vs cache hits so repeated work is visible. */
-  decisions?: { liveCalls: number; cacheHits: number; busy: number; cooldown: number; invalid: number; deferred: number; stopped: string | null };
+  decisions?: { liveCalls: number; cacheHits: number; busy: number; cooldown: number; invalid: number; deferred: number; unstored: number; stopped: string | null };
   /** Present only when the optional LFM3 summary engine is configured. A failure here never affects core analysis. */
   summaryAi?: { liveCalls: number; cacheHits: number; failures: number; stopped: string | null };
 }
@@ -214,7 +214,7 @@ export async function runAnalysis(input: AnalysisDeps): Promise<AnalysisStats> {
     }
   } finally {
     if (d.decisions) {
-      stats.decisions = { liveCalls: decisionsRun.liveCalls, cacheHits: decisionsRun.cacheHits, busy: decisionsRun.busy, cooldown: decisionsRun.cooldown, invalid: decisionsRun.invalid, deferred: decisionsRun.deferred, stopped: decisionsRun.stopped };
+      stats.decisions = { liveCalls: decisionsRun.liveCalls, cacheHits: decisionsRun.cacheHits, busy: decisionsRun.busy, cooldown: decisionsRun.cooldown, invalid: decisionsRun.invalid, deferred: decisionsRun.deferred, unstored: decisionsRun.unstored, stopped: decisionsRun.stopped };
       if (decisionsRun.stopped && !/^(per-run request limit|not enough time)/.test(decisionsRun.stopped)) stats.note = `Decisions engine stopped: ${decisionsRun.stopped}`;
     }
     if (d.openrouter) stats.summaryAi = { liveCalls: summaryUsage.calls, cacheHits: summaryUsage.cache_hits, failures: summaryFailures, stopped: summaryStopped };

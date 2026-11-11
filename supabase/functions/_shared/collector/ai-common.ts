@@ -113,7 +113,12 @@ export interface Computed<T> {
 
 export type CachedOutcome<T> =
   | { status: 'hit'; value: T; cacheId: string }
-  | { status: 'computed'; value: T; cacheId: string; stored: boolean }
+  /**
+   * A live answer was obtained. `stored` says whether it is now durable in the cache. When it is not, `notStored` says why:
+   * 'write_failed' (the cache store errored; the lease was released) or 'lease_lost' (another worker holds a newer lease or already
+   * stored its own answer). Callers that build durable records from the answer (signals + provenance) must not do so unless `stored`.
+   */
+  | { status: 'computed'; value: T; cacheId: string; stored: boolean; notStored?: 'write_failed' | 'lease_lost' }
   | { status: 'busy'; cacheId: string | null }
   | { status: 'cooldown'; cacheId: string | null }
   /** A cache MISS that the caller's gate refused to turn into a live request. The lease was released; nothing was recorded against the input. */
@@ -177,15 +182,20 @@ export async function cachedCompute<T>(
       throw err;
     }
     let stored = false;
+    let notStored: 'write_failed' | 'lease_lost' | undefined;
     try {
       stored = await store.aiCacheComplete(lease, c.result, c.citations, c.usage);
-      if (!stored) o.log?.warn('AI result not stored: the lease was lost to a newer holder (or the entry was already completed)', { task: key.task });
+      if (!stored) {
+        notStored = 'lease_lost';
+        o.log?.warn('AI result not stored: the lease was lost to a newer holder (or the entry was already completed)', { task: key.task });
+      }
     } catch (e) {
-      // The answer is valid and is still returned; it just is not reusable. The lease is released so the next run can store it.
+      // The answer is valid and is still returned, but it is NOT durable. The lease is released (fenced) so the next run can retry or reuse.
+      notStored = 'write_failed';
       o.log?.warn('AI cache write failed', { task: key.task, error: safeError(e) });
       await store.aiCacheAbandon(lease).catch(() => undefined);
     }
-    return { status: 'computed', value: c.value, cacheId: lease.id, stored };
+    return { status: 'computed', value: c.value, cacheId: lease.id, stored, ...(notStored ? { notStored } : {}) };
   }
   return { status: 'busy', cacheId: null };
 }
