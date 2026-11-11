@@ -50,6 +50,12 @@ export default function App() {
   }, [currentTab]);
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
+      // Android/browser Back dismisses the top-level overlay before leaving its view.
+      const openModal = modalStateRef.current;
+      if (openModal.auth) { setIsAuthOpen(false); return; }
+      if (openModal.payment) { setIsPaymentOpen(false); return; }
+      if (openModal.pricing) { setIsPricingOpen(false); return; }
+      if (openModal.scoring) { setIsScoringOpen(false); return; }
       const previousTab = event.state?.demandRadarTab;
       if (typeof previousTab === 'string') setTabState(previousTab);
     };
@@ -153,6 +159,20 @@ export default function App() {
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [checkoutTier, setCheckoutTier] = useState<PricingTier>('Pro');
+
+  const modalStateRef = React.useRef({ auth: false, payment: false, pricing: false, scoring: false });
+  modalStateRef.current = { auth: isAuthOpen, payment: isPaymentOpen, pricing: isPricingOpen, scoring: isScoringOpen };
+  const anyModalOpen = isAuthOpen || isPaymentOpen || isPricingOpen || isScoringOpen;
+  const hadModalOpen = React.useRef(false);
+  useEffect(() => {
+    if (anyModalOpen && !hadModalOpen.current) {
+      window.history.pushState({ ...(window.history.state ?? {}), demandRadarModal: true }, '', window.location.href);
+    } else if (!anyModalOpen && hadModalOpen.current && window.history.state?.demandRadarModal) {
+      // Remove the overlay's history entry when it is dismissed with its own close button.
+      window.history.back();
+    }
+    hadModalOpen.current = anyModalOpen;
+  }, [anyModalOpen]);
 
   // Sync opportunity score updates when weights change
   const handleUpdateWeights = (newWeights: ScoringWeights) => {
