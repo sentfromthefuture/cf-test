@@ -24,7 +24,7 @@ export async function summariseClusterCached(
   const outcome = await cachedCompute<ClusterSummary>(
     store, { task: 'summary', model: cfg.model, configVersion: cfg.configVersion, hash },
     async () => {
-      const summary = await meteredCall(cfg.http, o.usage, () => requestClusterSummary(cfg, stmts),
+      const summary = await meteredCall(cfg.http, o.usage, () => requestClusterSummary(cfg, stmts, { log: o.log }),
         (s) => ({ inputTokens: s.usage?.prompt_tokens ?? 0, outputTokens: s.usage?.completion_tokens ?? 0, costUsd: s.usage?.reported_cost_usd ?? null }), o.now);
       return { value: summary, result: summary as unknown as Record<string, unknown>, citations: [], usage: { ...(summary.usage ?? {}) } };
     },

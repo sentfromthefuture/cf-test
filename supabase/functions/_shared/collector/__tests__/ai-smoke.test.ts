@@ -559,3 +559,31 @@ test('the smoke test is a pure function of the environment and the database: it 
   assert.equal(report.testMode, true);
   assert.equal(report.action, 'ai_smoke_test');
 });
+
+test('an unusable LFM3 answer is reported with its reason and token counts, not just "invalid_response"', async () => {
+  const exhausted = () => ({
+    id: 'gen-x', provider: 'Liquid', model: 'liquid/lfm-3-1.7b-20261106:free',
+    choices: [{ index: 0, finish_reason: 'length', native_finish_reason: 'length', message: { role: 'assistant', content: null, reasoning: 'thinking about the statements '.repeat(40) } }],
+    usage: { prompt_tokens: 300, completion_tokens: 1600, total_tokens: 1900, cost: 0 },
+  });
+  const a = await run({ env: BOTH, handler: handler({ chat: exhausted }) });
+  assert.deepEqual(statuses(a.report), ['passed', 'failed']);
+  const issue = a.report.lfm3.issue!;
+  assert.match(issue, /^summary request failed: invalid_response \[reasoning_exhausted_budget, finish_reason=length, completion_tokens=1600\/1600\]/);
+  assert.ok(issue.length < 200, 'short enough to be shown whole in the admin panel');
+  assert.ok(!issue.includes('thinking about'), 'model text is never part of the report');
+  assert.equal(a.report.lfm3.stopped, null, 'an unusable answer is about the input, not a reason to stop the engine');
+  assert.deepEqual({ live: a.report.lfm3.liveCalls, failed: a.report.lfm3.failed, calls: a.report.lfm3.usage.calls, failures: a.report.lfm3.usage.failures, consistent: a.report.lfm3.usage.consistent }, { live: 1, failed: 1, calls: 1, failures: 1, consistent: true });
+  assert.deepEqual({ inTok: a.report.lfm3.usage.inputTokens, outTok: a.report.lfm3.usage.outputTokens, recorded: a.report.lfm3.usage.recorded }, { inTok: 300, outTok: 1600, recorded: 'ok' }, 'the tokens the provider spent are accounted for');
+  const entries = cacheEntries(a.mem, 'summary');
+  assert.deepEqual({ n: entries.length, status: entries[0].status, result: entries[0].result }, { n: 1, status: 'failed', result: null });
+  assert.equal(a.report.decisions.output.written, 3, 'Decisions Fast is unaffected');
+  assert.equal(count(a.httpCalls, CHAT_URL), 1, 'one request, no retry');
+
+  // A provider-side failure on the choice stops the engine and leaves no marker against the cluster.
+  const b = await run({ env: BOTH, handler: handler({ chat: () => ({ choices: [{ finish_reason: 'error', error: { code: 503, message: 'x' }, message: { content: null } }] }) }) });
+  assert.equal(b.report.lfm3.status, 'failed');
+  assert.match(b.report.lfm3.issue!, /unavailable \(HTTP 503\) \[provider_error, finish_reason=error\]/);
+  assert.match(b.report.lfm3.stopped!, /^unavailable/);
+  assert.equal(cacheEntries(b.mem, 'summary').length, 0);
+});
