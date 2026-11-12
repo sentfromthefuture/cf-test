@@ -6,7 +6,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DataSourcesView } from '../components/DataSourcesView';
 import { AiSmokeTestPanelView } from '../components/AiSmokeTestPanel';
-import { createSmokeController, parseAiSmokeReport, runAiSmokeTest, sanitiseText, SmokeState, SmokeTestClient, SmokeTestError } from '../lib/aiSmokeTest';
+import { AI_SMOKE_TEST_MAX_RECORDS, createSmokeController, parseAiSmokeReport, runAiSmokeTest, sanitiseText, SmokeState, SmokeTestClient, SmokeTestError } from '../lib/aiSmokeTest';
 
 // ---- fixtures: the shape documented in docs/ai-smoke-test.md
 const usage = (o: Record<string, unknown> = {}) => ({ calls: 3, successes: 3, failures: 0, rateLimited: 0, httpRequests: 3, retries: 0, cacheHits: 0, cacheMisses: 3, inputTokens: 0, outputTokens: 0, reportedCostUsd: 0, costReportedCalls: 3, tokensReported: true, consistent: true, recorded: 'ok', ...o });
@@ -142,6 +142,95 @@ test('an unfamiliar engine status is surfaced as unrecognised, not as a pass', (
   assert.equal(r.engines[0].status, 'unknown');
   assert.equal(r.engines[0].passed, false);
   assert.equal(r.overall, 'partial');
+});
+
+// ------------------------------------------------------------------------------------------------ strict identification of a report
+
+/** A copy of the valid fixture with `key` removed (not set to undefined: a missing field and an undefined one are different on the wire). */
+const without = (key: string, from: Record<string, unknown> = report()) => { const { [key]: _removed, ...rest } = from; return rest; };
+const withRecords = (o: Record<string, unknown>) => report({ records: { candidatesRead: 12, eligible: 9, selected: 3, ...o } });
+const withoutRecordsKey = (key: string) => report({ records: without(key, { candidatesRead: 12, eligible: 9, selected: 3 }) });
+const expectRejected = async (data: unknown) => {
+  assert.equal(parseAiSmokeReport(data), null);
+  await assert.rejects(() => run(data), (e: unknown) => e instanceof SmokeTestError && e.kind === 'unrecognised');
+};
+
+test('the valid fixture is accepted, and the ceiling mirrors the backend\'s 3', () => {
+  assert.equal(AI_SMOKE_TEST_MAX_RECORDS, 3);
+  assert.ok(parseAiSmokeReport(report()));
+});
+
+test('rejected: testMode is missing, false or not the boolean true', async () => {
+  await expectRejected(without('testMode'));
+  for (const bad of [false, 'true', 1, null]) await expectRejected(report({ testMode: bad }));
+});
+
+test('rejected: action is missing or is not ai_smoke_test (including another action\'s test-mode report)', async () => {
+  await expectRejected(without('action'));
+  for (const bad of ['analysis_test', 'reanalyse', 'AI_SMOKE_TEST', '', null, ['ai_smoke_test']]) await expectRejected(report({ action: bad }));
+  // an analysis_test response also carries testMode:true and a maxRecords, but not the ai_smoke_test action or engine results
+  await expectRejected({ testMode: true, action: 'analysis_test', maxRecords: 10, method: 'heuristic', ran: true });
+});
+
+test('rejected: either engine result object is missing or is not an object', async () => {
+  await expectRejected(without('decisions'));
+  await expectRejected(without('lfm3'));
+  for (const bad of [null, 'passed', 7, ['passed'], true]) {
+    await expectRejected(report({ decisions: bad }));
+    await expectRejected(report({ lfm3: bad }));
+  }
+});
+
+test('rejected: the record count is missing', async () => {
+  await expectRejected(without('records'));
+  await expectRejected(report({ records: null }));
+  await expectRejected(report({ records: [3] }));
+  await expectRejected(withoutRecordsKey('selected'));
+  await expectRejected(without('maxRecords'));
+});
+
+test('rejected: the record count is above the maximum of 3, negative, fractional or not a number', async () => {
+  for (const bad of [4, 10, 1000, -1, 2.5, NaN, Infinity, '3', null, true]) await expectRejected(withRecords({ selected: bad }));
+  for (const bad of [4, 10, 0, -3, 2.5, NaN, '3', null]) await expectRejected(report({ maxRecords: bad }));
+  await expectRejected(report({ maxRecords: 2, records: { candidatesRead: 12, eligible: 9, selected: 3 } })); // used more than the report's own limit
+});
+
+test('accepted: every in-range record count, including none selected', async () => {
+  for (const selected of [0, 1, 2, 3]) {
+    const r = await run(withRecords({ selected }));
+    assert.equal(r.records.selected, selected);
+    assert.equal(r.maxRecords, 3);
+  }
+  const lower = await run(report({ maxRecords: 2, records: { candidatesRead: 12, eligible: 9, selected: 2 } }));
+  assert.equal(lower.maxRecords, 2);
+});
+
+test('a rejected response ends in an "unrecognised" error state and never shows a report or a pass', async () => {
+  const c = createSmokeController(() => run(report({ testMode: false })), noop);
+  c.request(); await c.confirm();
+  const s = c.getState();
+  assert.equal(s.phase, 'error');
+  assert.equal(s.phase === 'error' && s.kind, 'unrecognised');
+  const html = view(s);
+  assert.match(html, /Unrecognised response/);
+  assert.doesNotMatch(html, /Overall:|smoke-report|both engines passed/);
+});
+
+// ------------------------------------------------------------------------------------------------ what the panel says it does
+
+test('the panel description states what the test does and does not change', () => {
+  const text = view({ phase: 'idle' }).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.match(text, /at most 3 existing pending records/);
+  assert.match(text, /Collects no new source data/);
+  assert.match(text, /does not change pending record statuses/);
+  assert.match(text, /may update the AI cache, dr_signal_ai, usage counters and a temporary lock/);
+  assert.doesNotMatch(text, /changes no records|Collects nothing new/);
+});
+
+test('the confirmation step lists the same side effects before anything is sent', () => {
+  const text = view({ phase: 'confirming' }).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  assert.match(text, /may update the AI cache, dr_signal_ai, usage counters and a temporary lock/);
+  assert.match(text, /one attempt each, no retries/);
 });
 
 // ------------------------------------------------------------------------------------------------ confirmation, loading, duplicates

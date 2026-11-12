@@ -74,14 +74,14 @@ export const AiSmokeTestPanelView: React.FC<ViewProps> = ({ state, onRequest, on
         <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
         <div>
           <h2 className="text-sm font-bold text-white">AI engine check <span className="ml-1 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] font-mono text-slate-400">temporary</span></h2>
-          <p className="text-[11px] text-slate-400 mt-0.5">Tests Decisions Fast and LFM3 separately on at most 3 existing pending records. Collects nothing new and changes no records.</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Tests Decisions Fast and LFM3 separately on at most 3 existing pending records. Collects no new source data and does not change pending record statuses, but may update the AI cache, dr_signal_ai, usage counters and a temporary lock.</p>
         </div>
       </div>
 
       {state.phase === 'confirming' ? (
         <div role="alertdialog" aria-label="Confirm AI smoke test" className="rounded-lg border border-amber-800/70 bg-amber-950/20 p-3 space-y-3 text-xs text-amber-100">
           <p className="font-semibold">Run the AI smoke test now?</p>
-          <p className="text-[11px] text-amber-200/90">It sends up to 3 existing records to the free Decisions Fast and LFM3 models (one attempt each, no retries), may update the AI cache and usage counters, and can take up to two minutes. Keep this page open.</p>
+          <p className="text-[11px] text-amber-200/90">It sends up to 3 existing records to the free Decisions Fast and LFM3 models (one attempt each, no retries), may update the AI cache, dr_signal_ai, usage counters and a temporary lock, and can take up to two minutes. Keep this page open.</p>
           <div className="flex flex-col sm:flex-row gap-2">
             <button onClick={onConfirm} className="min-h-[44px] rounded-lg bg-cyan-600 px-4 py-2 text-xs font-bold text-white hover:bg-cyan-500 cursor-pointer">Yes, run the test</button>
             <button onClick={onCancel} className="min-h-[44px] rounded-lg border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700 cursor-pointer">Cancel</button>

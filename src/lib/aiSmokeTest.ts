@@ -61,6 +61,11 @@ export function sanitiseText(value: unknown, max = 240): string {
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** The backend's hard ceiling on records used (AI_SMOKE_TEST_MAX_RECORDS in supabase/functions/_shared/collector/ai-smoke.ts). A report claiming more is not trusted. */
+export const AI_SMOKE_TEST_MAX_RECORDS = 3;
+/** A whole number from 0 up to and including `max`. Strings, fractions, negatives, NaN and Infinity are all rejected. */
+const isBoundedCount = (v: unknown, max: number): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= max;
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -147,13 +152,25 @@ function engineView(key: EngineView['key'], label: string, raw: unknown): Engine
   };
 }
 
-/** Interprets the backend's report. Returns null when the response is not an ai_smoke_test report. Never renders raw fields. */
+/**
+ * Interprets the backend's report. Returns null unless the response is positively identified as an ai_smoke_test report:
+ *  - testMode === true and action === 'ai_smoke_test' (the markers the backend always sets; an analysis_test or collection response lacks them),
+ *  - a recognised overall status,
+ *  - both engine result objects,
+ *  - a bounded record count: maxRecords is a whole number from 1 to 3 and records.selected is a whole number from 0 to maxRecords.
+ * Never renders raw fields.
+ */
 export function parseAiSmokeReport(raw: unknown): ParsedReport | null {
-  if (!isObj(raw) || typeof raw.overall !== 'string' || !OVERALL_VALUES.includes(raw.overall as OverallStatus)) return null;
+  if (!isObj(raw)) return null;
+  if (raw.testMode !== true || raw.action !== 'ai_smoke_test') return null;
+  if (typeof raw.overall !== 'string' || !OVERALL_VALUES.includes(raw.overall as OverallStatus)) return null;
+  if (!isObj(raw.decisions) || !isObj(raw.lfm3)) return null;
+  if (!isBoundedCount(raw.maxRecords, AI_SMOKE_TEST_MAX_RECORDS) || raw.maxRecords < 1) return null;
+  if (!isObj(raw.records) || !isBoundedCount(raw.records.selected, raw.maxRecords)) return null;
+  const records = raw.records;
   const decisions = engineView('decisions', 'Decisions Fast', raw.decisions);
   const lfm3 = engineView('lfm3', 'LFM3', raw.lfm3);
   if (!decisions || !lfm3) return null;
-  const records = isObj(raw.records) ? raw.records : {};
   const reported = raw.overall as OverallStatus;
   // HTTP 200 and even overall:"passed" are not taken on trust: both engines must individually pass.
   const overall: OverallStatus = reported === 'passed' && !(decisions.passed && lfm3.passed) ? 'partial' : reported;
