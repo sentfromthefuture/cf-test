@@ -35,7 +35,15 @@ const recompute = (opp: Opportunity, w: ScoringWeights): number => {
 };
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<string>(() => new URLSearchParams(window.location.search).get('tab') === 'account' ? 'account' : 'landing');
+  const [currentTab, setTabState] = useState<string>(() => new URLSearchParams(window.location.search).get('tab') === 'account' ? 'account' : 'landing');
+  // Route in-app tab changes through browser history so Android/browser Back restores prior views.
+  const setCurrentTab = (next: string | ((current: string) => string)) => {
+    const tab = typeof next === 'function' ? next(currentTab) : next;
+    if (tab === currentTab) return;
+    window.history.pushState({ ...(window.history.state ?? {}), demandRadarTab: tab }, '', window.location.href);
+    setTabState(tab);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [opportunities, setOpportunities] = useState<Opportunity[]>(INITIAL_OPPORTUNITIES);
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity>(INITIAL_OPPORTUNITIES[0]);
@@ -133,6 +141,44 @@ export default function App() {
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [checkoutTier, setCheckoutTier] = useState<PricingTier>('Pro');
+
+  // Keep modal state current for the popstate listener without re-registering it.
+  const modalStateRef = React.useRef({ auth: false, payment: false, pricing: false, scoring: false });
+  modalStateRef.current = { auth: isAuthOpen, payment: isPaymentOpen, pricing: isPricingOpen, scoring: isScoringOpen };
+  const anyModalOpen = isAuthOpen || isPaymentOpen || isPricingOpen || isScoringOpen;
+  const hadModalOpen = React.useRef(false);
+  const suppressModalHistoryCleanup = React.useRef(false);
+
+  useEffect(() => {
+    window.history.replaceState({ ...(window.history.state ?? {}), demandRadarTab: currentTab }, '', window.location.href);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const openModal = modalStateRef.current;
+      if (openModal.auth) { suppressModalHistoryCleanup.current = true; setIsAuthOpen(false); return; }
+      if (openModal.payment) { suppressModalHistoryCleanup.current = true; setIsPaymentOpen(false); return; }
+      if (openModal.pricing) { suppressModalHistoryCleanup.current = true; setIsPricingOpen(false); return; }
+      if (openModal.scoring) { suppressModalHistoryCleanup.current = true; setIsScoringOpen(false); return; }
+      if (typeof event.state?.demandRadarTab === 'string') setTabState(event.state.demandRadarTab);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (anyModalOpen && !hadModalOpen.current) {
+      window.history.pushState({ ...(window.history.state ?? {}), demandRadarModal: true }, '', window.location.href);
+    } else if (!anyModalOpen && hadModalOpen.current) {
+      if (suppressModalHistoryCleanup.current) {
+        suppressModalHistoryCleanup.current = false;
+      } else if (window.history.state?.demandRadarModal) {
+        // Manual close: remove the modal-only entry without navigating to another tab.
+        window.history.back();
+      }
+    }
+    hadModalOpen.current = anyModalOpen;
+  }, [anyModalOpen]);
 
   // Sync opportunity score updates when weights change
   const handleUpdateWeights = (newWeights: ScoringWeights) => {
