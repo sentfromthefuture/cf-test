@@ -7,7 +7,7 @@
 //   optional: GITHUB_TOKEN, STACKEXCHANGE_KEY, GEMINI_API_KEY (+ GEMINI_MODEL, GEMINI_EMBEDDING_MODEL), AUTHOR_HASH_SALT.
 //   optional AI engines (both OFF by default, free models only; see docs/AI_ARCHITECTURE.md): OPENROUTER_API_KEY, DECISIONS_ENABLED (+ DECISIONS_MODEL, DECISIONS_MAX_PER_RUN,
 //   DECISIONS_MIN_PROBLEM_PROBABILITY, DECISIONS_MIN_INTERVAL_MS), OPENROUTER_ENABLED (+ OPENROUTER_MODEL, OPENROUTER_MAX_SUMMARIES_PER_RUN), AI_CACHE_VERSION.
-import { runAnalysisTest, runCollection, SupabaseStore } from '../_shared/collector/index.ts';
+import { runAiSmokeTest, runAnalysisTest, runCollection, SupabaseStore } from '../_shared/collector/index.ts';
 
 declare const Deno: { env: { toObject(): Record<string, string> }; serve(h: (req: Request) => Response | Promise<Response>): void };
 
@@ -43,7 +43,7 @@ async function isAdminUser(req: Request, supabaseUrl: string, anonKey: string): 
 
 /** The ONLY actions this function understands. Anything else is rejected with 400 before any store or connector is touched.
  *  (A request with no action at all is the normal collection run used by cron and the manual sync button.) */
-const ACTIONS = ['reanalyse', 'analysis_test'] as const;
+const ACTIONS = ['reanalyse', 'analysis_test', 'ai_smoke_test'] as const;
 type Action = (typeof ACTIONS)[number];
 
 Deno.serve(async (req) => {
@@ -94,6 +94,13 @@ Deno.serve(async (req) => {
         // Any other body field (source, skipAnalysis, a limit, ...) is deliberately ignored: this branch cannot be steered by the caller.
         if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
         return json(await runAnalysisTest({ store, budgetMs: 110_000 }));
+      }
+      case 'ai_smoke_test': {
+        // Admin JWT only (never the schedule secret: this must not be schedulable). Tests Decisions Fast and LFM3 independently on at most 3
+        // existing pending records, reusing the production adapters and cache; no retries, no record status changes. See docs/ai-smoke-test.md.
+        // Nothing in the request body is read in this branch, so the caller cannot steer it (no limit, model or record ids).
+        if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
+        return json(await runAiSmokeTest({ store, env, budgetMs: 110_000 }));
       }
       case 'reanalyse': {
         // Admin only: re-queue keyword-analysed records so they are re-processed (with AI when a key is configured).
