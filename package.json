@@ -11,7 +11,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:collector": "tsx --test supabase/functions/_shared/collector/__tests__/*.test.ts",
-    "collector:live-check": "tsx supabase/functions/_shared/collector/live-check.ts"
+    "collector:live-check": "tsx supabase/functions/_shared/collector/live-check.ts",
+    "test:frontend": "tsx --test src/__tests__/*.test.tsx"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",

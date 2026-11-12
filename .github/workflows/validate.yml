@@ -36,3 +36,6 @@ jobs:
 
       - name: Collector tests
         run: bun run test:collector
+
+      - name: Frontend tests
+        run: bun run test:frontend
