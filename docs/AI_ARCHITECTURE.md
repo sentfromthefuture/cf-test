@@ -196,3 +196,5 @@ and `bash supabase/tests/31_ai_cache_concurrency.sh <db>`.
 13. **Service-level failures (429 / 5xx / timeouts) have no cross-run backoff.** They are bounded *within* a run (one failed request, then no more live requests), and a failed request is not a wasted answer, but each scheduled run will try again, so a long outage costs about one request per run. The durable backoff added in this round covers **cache-storage** failures only; extending it to model-side failures is a possible follow-up. **Recovery latency:** after storage heals, the first probe happens once the engine window (up to 6 h) has passed.
 14. **`reanalyse` and a per-run cap interact badly** (see deploy step 5). A follow-up could make `reanalyse` skip requeueing when Decisions is enabled, or requeue in capped slices.
 15. **No UI** shows `dr_cluster_profile`, `dr_ai_usage` or citations yet.
+
+**See also:** `docs/ai-smoke-test.md` – the admin-only `ai_smoke_test` action that verifies both engines on at most 3 existing records before normal processing is enabled (it writes nothing to `dr_clusters`, so it cannot trigger the ranking effect described in 8b).

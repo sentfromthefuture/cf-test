@@ -74,7 +74,7 @@ for (const action of UNKNOWN_ACTIONS) {
       assert.equal(res.status, 400);
       const body = await res.json();
       assert.equal(body.error, 'unknown action');
-      assert.deepEqual(body.supported, ['reanalyse', 'analysis_test']);
+      assert.deepEqual(body.supported, ['reanalyse', 'analysis_test', 'ai_smoke_test']);
       assert.equal(res.headers.get('access-control-allow-origin'), '*', 'the browser must be able to read the 400');
       assert.deepEqual(b.rpcs(), ['dr_is_admin'], `unknown action caused calls: ${JSON.stringify(b.rpcs())}`);
       for (const c of COLLECTION_RPCS) assert.ok(!b.rpcs().includes(c), `must not call ${c}`);
