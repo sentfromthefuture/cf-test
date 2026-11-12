@@ -1,5 +1,6 @@
 import { ANALYSIS_TEST_MAX_RECORDS, runAnalysis, AnalysisStats } from './analysis.ts';
-import { geminiConfigFromEnv, openRouterConfigFromEnv } from './ai.ts';
+import { geminiConfigFromEnv, openRouterConfigFromEnv, openRouterConfigProblem } from './ai.ts';
+import { decisionsConfigFromEnv, decisionsConfigProblem } from './decisions.ts';
 import { connectors as defaultConnectors } from './connectors/index.ts';
 import { createHttpClient } from './http.ts';
 import { ClaimedSource, RunStats, Store } from './store.ts';
@@ -62,8 +63,10 @@ export async function runCollection(o: RunOptions): Promise<RunReport> {
   if (!o.skipAnalysis && timeLeftMs() > 25_000) {
     try {
       // AI calls: paced (free-tier keys allow only a few requests/minute), bounded so one tap can never outlive the function's time limit.
-      const http = createHttpClient({ fetchImpl: o.fetchImpl, sleep: o.sleep, retries: 1, timeoutMs: 30_000, maxInlineWaitMs: 15_000, minIntervalMs: { gemini: Number(o.env.GEMINI_MIN_INTERVAL_MS) || 3000, openrouter: Number(o.env.OPENROUTER_MIN_INTERVAL_MS) || 1500 } });
-      analysis = await runAnalysis({ store: o.store, gemini: geminiConfigFromEnv(o.env, http), openrouter: openRouterConfigFromEnv(o.env, http), maxOpenRouterSummaries: Number(o.env.OPENROUTER_MAX_SUMMARIES_PER_RUN) || 2, log, timeLeftMs, clusterThreshold: Number(o.env.CLUSTER_SIMILARITY) > 0 ? Number(o.env.CLUSTER_SIMILARITY) : undefined });
+      const http = createHttpClient({ fetchImpl: o.fetchImpl, sleep: o.sleep, retries: 1, timeoutMs: 30_000, maxInlineWaitMs: 15_000, minIntervalMs: { gemini: Number(o.env.GEMINI_MIN_INTERVAL_MS) || 3000, openrouter: Number(o.env.OPENROUTER_MIN_INTERVAL_MS) || 1500, decisions: Number(o.env.DECISIONS_MIN_INTERVAL_MS) || 3500 } });
+      // Both AI engines are off unless explicitly enabled. If one is enabled but unusable (missing key, non-free model) say so once, without any secret.
+      for (const problem of [decisionsConfigProblem(o.env), openRouterConfigProblem(o.env)]) if (problem) log.warn('AI engine disabled by configuration', { reason: problem });
+      analysis = await runAnalysis({ store: o.store, gemini: geminiConfigFromEnv(o.env, http), openrouter: openRouterConfigFromEnv(o.env, http), decisions: decisionsConfigFromEnv(o.env, http), maxOpenRouterSummaries: Number(o.env.OPENROUTER_MAX_SUMMARIES_PER_RUN) || 2, log, timeLeftMs, clusterThreshold: Number(o.env.CLUSTER_SIMILARITY) > 0 ? Number(o.env.CLUSTER_SIMILARITY) : undefined });
     } catch (e) {
       log.error('analysis failed', { error: safeError(e) });
       analysis = { ran: false, method: 'none', claimed: 0, skipped: 0, analysed: 0, problems: 0, failed: 0, clustered: 0, clustersRefreshed: 0, summaries: 0, note: safeError(e) };
@@ -110,7 +113,7 @@ export async function runAnalysisTest(o: AnalysisTestOptions): Promise<AnalysisT
   const now = o.now ?? (() => new Date());
   const startedAt = now().getTime();
   const budgetMs = o.budgetMs ?? 100_000;
-  const a = await runAnalysis({ store: o.store, gemini: null, openrouter: null, log: o.log ?? consoleLogger, timeLeftMs: () => budgetMs - (now().getTime() - startedAt), testMode: true });
+  const a = await runAnalysis({ store: o.store, gemini: null, openrouter: null, decisions: null, log: o.log ?? consoleLogger, timeLeftMs: () => budgetMs - (now().getTime() - startedAt), testMode: true });
   return {
     testMode: true, action: 'analysis_test', maxRecords: ANALYSIS_TEST_MAX_RECORDS, method: a.method, ran: a.ran,
     claimed: a.claimed, analysed: a.analysed, skipped: a.skipped, problems: a.problems, failed: a.failed,
