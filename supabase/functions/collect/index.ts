@@ -98,7 +98,9 @@ Deno.serve(async (req) => {
       case 'ai_smoke_test': {
         // Admin JWT only (never the schedule secret: this must not be schedulable). Tests Decisions Fast and LFM3 independently on at most 3
         // existing pending records, reusing the production adapters and cache; no retries, no record status changes. See docs/ai-smoke-test.md.
-        // Nothing in the request body is read in this branch, so the caller cannot steer it (no limit, model or record ids).
+        // By this point the handler has already read and parsed the JSON body (a malformed body, or one that is not an object, got a 400
+        // above) and used `action` to route here. Nothing else in it is used: `source`, `skipAnalysis` and any other field are ignored, and
+        // only `store`, `env` and a fixed budget reach runAiSmokeTest, so the caller cannot steer the run (no limit, model or record ids).
         if (trigger !== 'manual') return json({ error: 'forbidden' }, 403);
         return json(await runAiSmokeTest({ store, env, budgetMs: 110_000 }));
       }

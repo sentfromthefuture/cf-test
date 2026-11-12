@@ -8,7 +8,8 @@
 //  - cluster, summarise real clusters, or write dr_clusters;
 //  - read or change feature flags: an engine that is not already enabled and valid in the environment is reported as such, never forced on;
 //  - retry: it builds its own HTTP client with retries = 0 and the Decisions runner stops at the first service-level failure;
-//  - take any caller input: the action reads nothing from the request body (no limit, no model, no record ids).
+//  - take any caller input: the entrypoint parses the request body only to route the action and passes nothing from it to this module
+//    (no limit, no model, no record ids).
 // Worst case it makes 3 Decisions requests + 1 LFM3 request, each a free model, each at most once.
 //
 // What it DOES write, all through the existing production code paths: dr_ai_cache rows (the cache), dr_signal_ai rows (the model-output

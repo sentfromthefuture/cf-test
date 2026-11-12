@@ -37,7 +37,7 @@ Code: `supabase/functions/_shared/collector/ai-smoke.ts` (logic) and `supabase/f
 
 | Guarantee | Enforced by |
 |---|---|
-| Not schedulable; not public | `trigger !== 'manual'` -> 403 in `collect/index.ts`; the request body is not read for this action |
+| Not schedulable; not public | `trigger !== 'manual'` -> 403 in `collect/index.ts`; the body is parsed only to route the action (a malformed body gets 400) and nothing from it is passed on |
 | At most 3 records, at most 3 + 1 live requests | constants in `ai-smoke.ts`; slices on every read; no limit parameter exists |
 | No automatic retries, no fallback model | the smoke test builds its own HTTP client with `retries: 0`; Decisions stops at the first service-level failure; no second model is ever tried |
 | Never fetches source data, never requeues | it takes no connectors and never calls `claimDueSources`, `upsertRecords`, `requeueHeuristicAnalysis` |
