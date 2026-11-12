@@ -167,7 +167,7 @@ export class SupabaseStore implements Store {
   // ---- AI cache / telemetry (see supabase/migrations/20261109000000_ai_results_cache.sql)
   async aiCacheBegin(key: AiCacheKey, leaseSeconds: number): Promise<CacheBegin> {
     const r = await this.rpc<CacheBegin>('dr_ai_cache_begin', { p_task: key.task, p_hash: key.hash, p_model: key.model, p_version: key.configVersion, p_lease_seconds: leaseSeconds });
-    if (!r || typeof r !== 'object' || !['hit', 'claimed', 'busy', 'cooldown'].includes((r as { state?: string }).state ?? '')) throw new Error('dr_ai_cache_begin returned an unexpected value');
+    if (!r || typeof r !== 'object' || !['hit', 'claimed', 'busy', 'cooldown', 'storage_backoff'].includes((r as { state?: string }).state ?? '')) throw new Error('dr_ai_cache_begin returned an unexpected value');
     if (r.state === 'claimed' && !(typeof r.id === 'string' && typeof r.epoch === 'number' && Number.isFinite(r.epoch))) throw new Error('dr_ai_cache_begin returned a lease without a fencing epoch');
     return r;
   }
@@ -176,6 +176,9 @@ export class SupabaseStore implements Store {
   }
   async aiCacheFail(lease: AiLease, reason: string) { await this.rpc('dr_ai_cache_fail', { p_id: lease.id, p_epoch: lease.epoch, p_reason: reason }); }
   async aiCacheAbandon(lease: AiLease) { await this.rpc('dr_ai_cache_abandon', { p_id: lease.id, p_epoch: lease.epoch }); }
+  async aiCacheFailStorage(lease: AiLease, reason: string): Promise<boolean> {
+    return (await this.rpc<boolean>('dr_ai_cache_fail_storage', { p_id: lease.id, p_epoch: lease.epoch, p_reason: reason })) === true;
+  }
   async aiCacheInvalidate(id: string) { await this.rpc('dr_ai_cache_invalidate', { p_id: id }); }
   async aiNoteUsage(engine: AiTask, usage: AiUsageCounters) { await this.rpc('dr_ai_note_usage', { p_engine: engine, p_counters: usage }); }
   async saveSignalAi(rows: SignalAiRow[]): Promise<number> {

@@ -163,6 +163,98 @@ begin
   assert r.status = 'pending' and r.lease_epoch = (b->>'epoch')::bigint and r.failed_attempts = 1, 'new attempt intact, history kept';
 end $$;
 
+-- ---------------------------------------------------------------- 2c. durable, bounded backoff for cache-STORAGE failures (separate from input failures)
+do $$
+declare
+  m constant text := 'storage-test:free';
+  a jsonb; b jsonb; c jsonb; d jsonb; x jsonb; ea bigint; eb bigint; r public.dr_ai_cache%rowtype; hl public.dr_ai_health%rowtype;
+begin
+  -- an answer that WAS stored earlier (so we can prove hits are still served during the backoff)
+  x := public.dr_ai_cache_begin('decisions', pg_temp.h('st0'), m, 'v1');
+  assert public.dr_ai_cache_complete((x->>'id')::uuid, (x->>'epoch')::bigint, '{"ok":"stored-earlier"}'::jsonb);
+
+  -- (1) fenced: a stale holder cannot record a storage failure against a newer lease
+  a := public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1'); ea := (a->>'epoch')::bigint;
+  update public.dr_ai_cache set lease_until = now() - interval '1 second' where id = (a->>'id')::uuid;
+  b := public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1'); eb := (b->>'epoch')::bigint;
+  assert eb > ea, 'takeover moved the epoch';
+  assert not public.dr_ai_cache_fail_storage((a->>'id')::uuid, ea, 'stale'), 'a stale storage failure is refused';
+  select * into r from public.dr_ai_cache where id = (a->>'id')::uuid;
+  assert r.status = 'pending' and r.storage_failures = 0 and r.lease_epoch = eb, 'the new holder''s lease is untouched';
+  assert not exists (select 1 from public.dr_ai_health where task = 'decisions' and model = m), 'a refused call leaves no engine-level trace';
+
+  -- (2) the current holder records it: separate counters, ~15 min for this input, ~5 min for the engine
+  assert public.dr_ai_cache_fail_storage((b->>'id')::uuid, eb, 'write_failed'), 'the current holder records the failure';
+  select * into r from public.dr_ai_cache where id = (a->>'id')::uuid;
+  assert r.status = 'failed' and r.failure_kind = 'storage' and r.result is null and r.storage_failures = 1 and r.failed_attempts = 0,
+    format('storage failure is kept apart from input failures: %s', r);
+  assert r.retry_after between now() + interval '14 minutes' and now() + interval '16 minutes', format('entry cooldown ~15 min, got %s', r.retry_after - now());
+  select * into hl from public.dr_ai_health where task = 'decisions' and model = m;
+  assert hl.storage_failures = 1 and hl.unhealthy_until between now() + interval '4 minutes' and now() + interval '6 minutes', format('engine backoff ~5 min: %s', hl);
+  assert not public.dr_ai_cache_fail_storage((b->>'id')::uuid, eb, 'again'), 'only a pending entry can be failed';
+  -- it can never overwrite a result that was in fact stored
+  d := public.dr_ai_cache_begin('decisions', pg_temp.h('st-won'), 'other-model:free', 'v1');
+  assert public.dr_ai_cache_complete((d->>'id')::uuid, (d->>'epoch')::bigint, '{"ok":1}'::jsonb);
+  assert not public.dr_ai_cache_fail_storage((d->>'id')::uuid, (d->>'epoch')::bigint, 'late'), 'a stored result is never overwritten by a failure marker';
+  assert (select status from public.dr_ai_cache where id = (d->>'id')::uuid) = 'succeeded';
+
+  -- (3) this input waits; (4) a DIFFERENT input that needs a live call waits too, but another model is unaffected
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1')->>'state' = 'cooldown', 'the failed input waits out its cooldown';
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('st2'), m, 'v1')->>'state' = 'storage_backoff', 'a new input needing a live call waits for the engine backoff';
+  assert not exists (select 1 from public.dr_ai_cache where input_hash = pg_temp.h('st2')), 'and no lease was taken for it';
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('st2'), 'unaffected-model:free', 'v1')->>'state' = 'claimed', 'the backoff is per task and model';
+  assert public.dr_ai_cache_begin('summary', pg_temp.h('st2'), m, 'v1')->>'state' = 'claimed', 'and per task';
+
+  -- (5) cache first: a stored answer is still served during the backoff
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('st0'), m, 'v1')->>'state' = 'hit', 'cached results are served while the engine is backing off';
+
+  -- (6) escalation: once the windows pass, the next failures double (entry 30 min, engine 10 min)
+  update public.dr_ai_health set unhealthy_until = now() - interval '1 second' where task = 'decisions' and model = m;
+  update public.dr_ai_cache set retry_after = now() - interval '1 second' where id = (a->>'id')::uuid;
+  c := public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1');
+  assert c->>'state' = 'claimed' and (c->>'epoch')::bigint > eb, 'retry after the windows: a new lease';
+  assert public.dr_ai_cache_fail_storage((c->>'id')::uuid, (c->>'epoch')::bigint, 'write_failed');
+  select * into r from public.dr_ai_cache where id = (a->>'id')::uuid;
+  assert r.storage_failures = 2 and r.failed_attempts = 0 and r.retry_after between now() + interval '29 minutes' and now() + interval '31 minutes', format('second entry cooldown ~30 min: %s', r.retry_after - now());
+  select * into hl from public.dr_ai_health where task = 'decisions' and model = m;
+  assert hl.storage_failures = 2 and hl.unhealthy_until between now() + interval '9 minutes' and now() + interval '11 minutes', format('second engine backoff ~10 min: %s', hl.unhealthy_until - now());
+
+  -- (7) caps: repeated failures never wait longer than 7 days (entry) / 6 hours (engine)
+  update public.dr_ai_cache set storage_failures = 40, status = 'pending', lease_epoch = lease_epoch + 1, lease_until = now() + interval '1 minute' where id = (a->>'id')::uuid;
+  update public.dr_ai_health set storage_failures = 40 where task = 'decisions' and model = m;
+  assert public.dr_ai_cache_fail_storage((a->>'id')::uuid, (select lease_epoch from public.dr_ai_cache where id = (a->>'id')::uuid), 'cap');
+  assert (select retry_after from public.dr_ai_cache where id = (a->>'id')::uuid) between now() + interval '167 hours' and now() + interval '169 hours', 'entry backoff is capped at 7 days';
+  assert (select unhealthy_until from public.dr_ai_health where task = 'decisions' and model = m) between now() + interval '359 minutes' and now() + interval '361 minutes', 'engine backoff is capped at 6 hours';
+
+  -- (8) separate from input-level failures: an input failure neither touches the engine breaker nor the storage counter
+  update public.dr_ai_health set storage_failures = 2, unhealthy_until = now() - interval '1 second' where task = 'decisions' and model = m;
+  d := public.dr_ai_cache_begin('decisions', pg_temp.h('in1'), m, 'v1');
+  assert public.dr_ai_cache_fail((d->>'id')::uuid, (d->>'epoch')::bigint, 'invalid_response');
+  select * into r from public.dr_ai_cache where id = (d->>'id')::uuid;
+  assert r.failure_kind = 'input' and r.failed_attempts = 1 and r.storage_failures = 0, 'an input failure uses its own counter';
+  assert (select storage_failures from public.dr_ai_health where task = 'decisions' and model = m) = 2, 'and does not move the engine-level storage breaker';
+
+  -- (9) abandon after storage history keeps the row (and its history)
+  update public.dr_ai_cache set retry_after = now() - interval '1 second', status = 'failed' where id = (a->>'id')::uuid;
+  c := public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1');
+  perform public.dr_ai_cache_abandon((c->>'id')::uuid, (c->>'epoch')::bigint);
+  select * into r from public.dr_ai_cache where id = (a->>'id')::uuid;
+  assert found and r.status = 'failed' and r.storage_failures > 0, 'storage history survives a release';
+
+  -- (10) RECOVERY: one successful write ends the backoff and releases the STORAGE cooldowns, but not the input-level one
+  update public.dr_ai_cache set status = 'failed', failure_kind = 'storage', retry_after = now() + interval '3 hours', lease_until = null where id = (a->>'id')::uuid;
+  update public.dr_ai_health set storage_failures = 3, unhealthy_until = now() - interval '1 second' where task = 'decisions' and model = m;  -- window over: a probe is allowed
+  update public.dr_ai_cache set retry_after = now() + interval '3 hours' where id = (d->>'id')::uuid;    -- the input-level failure is cooling down
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1')->>'state' = 'cooldown', 'before recovery the storage-failed input still waits';
+  x := public.dr_ai_cache_begin('decisions', pg_temp.h('probe'), m, 'v1');
+  assert x->>'state' = 'claimed', 'a probe request is allowed once the engine window has passed';
+  assert public.dr_ai_cache_complete((x->>'id')::uuid, (x->>'epoch')::bigint, '{"ok":"probe"}'::jsonb), 'the probe is stored: storage works again';
+  select * into hl from public.dr_ai_health where task = 'decisions' and model = m;
+  assert hl.storage_failures = 0 and hl.unhealthy_until is null, 'the engine-level backoff is cleared';
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('st1'), m, 'v1')->>'state' = 'claimed', 'the storage-failed input is immediately retryable';
+  assert public.dr_ai_cache_begin('decisions', pg_temp.h('in1'), m, 'v1')->>'state' = 'cooldown', 'the input-level cooldown is NOT cleared by a storage recovery';
+end $$;
+
 -- housekeeping
 do $$
 declare b jsonb; n integer;
@@ -382,10 +474,12 @@ end $$;
 do $$
 begin
   assert not has_table_privilege('anon', 'public.dr_ai_cache', 'select') and not has_table_privilege('authenticated', 'public.dr_ai_cache', 'select'), 'cache table not readable by browser roles';
-  assert not has_table_privilege('anon', 'public.dr_signal_ai', 'select') and not has_table_privilege('authenticated', 'public.dr_ai_usage', 'select'), 'AI tables not readable by browser roles';
+  assert not has_table_privilege('anon', 'public.dr_signal_ai', 'select') and not has_table_privilege('authenticated', 'public.dr_ai_usage', 'select') and not has_table_privilege('anon', 'public.dr_ai_health', 'select') and not has_table_privilege('authenticated', 'public.dr_ai_health', 'select'), 'AI tables not readable by browser roles';
+  assert (select relrowsecurity from pg_class where relname = 'dr_ai_health'), 'RLS is on for the new health table';
   assert not has_function_privilege('anon', 'public.dr_cluster_profile(uuid)', 'execute') and not has_function_privilege('authenticated', 'public.dr_ai_cache_begin(text,text,text,text,integer)', 'execute'), 'AI functions not callable by browser roles';
   assert has_function_privilege('service_role', 'public.dr_ai_cache_begin(text,text,text,text,integer)', 'execute'), 'collector can use them';
   assert has_function_privilege('service_role', 'public.dr_ai_cache_complete(uuid,bigint,jsonb,jsonb,jsonb)', 'execute') and not has_function_privilege('authenticated', 'public.dr_ai_cache_abandon(uuid,bigint)', 'execute'), 'fenced functions are service_role only';
+  assert has_function_privilege('service_role', 'public.dr_ai_cache_fail_storage(uuid,bigint,text)', 'execute') and not has_function_privilege('anon', 'public.dr_ai_cache_fail_storage(uuid,bigint,text)', 'execute') and not has_function_privilege('authenticated', 'public.dr_ai_cache_fail_storage(uuid,bigint,text)', 'execute'), 'the storage-failure recorder is service_role only';
 end $$;
 
 -- Grants are checked by EXECUTING each new function as each browser-facing role, not only by looking at the privilege tables:
@@ -397,6 +491,7 @@ declare
     format('select public.dr_ai_cache_begin(%L, %L, %L, %L)', 'decisions', repeat('a', 64), 'm', 'v'),
     format('select public.dr_ai_cache_complete(%L::uuid, 1, %L::jsonb)', z, '{"x":1}'),
     format('select public.dr_ai_cache_fail(%L::uuid, 1)', z),
+    format('select public.dr_ai_cache_fail_storage(%L::uuid, 1)', z),
     format('select public.dr_ai_cache_abandon(%L::uuid, 1)', z),
     format('select public.dr_ai_cache_invalidate(%L::uuid)', z),
     'select public.dr_ai_cache_prune(365)',

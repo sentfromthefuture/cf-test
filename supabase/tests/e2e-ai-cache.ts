@@ -27,6 +27,7 @@ const raw = async (name: string, args: Record<string, unknown>, key: string) => 
 };
 
 const store = new SupabaseStore(url, serviceKey);
+const tag = Math.random().toString(16).slice(2, 10); // unique per run, so each run's storage-backoff state is isolated
 const run = Math.random().toString(16).slice(2).padEnd(64, '0').slice(0, 64); // unique, valid 64-char hex identity per run
 const key = (suffix: string): AiCacheKey => ({ task: 'decisions', model: 'e2e-test:free', configVersion: `e2e-${run.slice(0, 8)}`, hash: run.slice(0, 60) + suffix.padStart(4, '0') }); // distinct identity per suffix
 
@@ -61,8 +62,20 @@ check(await store.aiCacheComplete(staleLease, { from: 'STALE-LATE' }, [], {}) ==
 const after = await store.aiCacheBegin(k2, 120) as any;
 check(after.state === 'hit' && after.result?.from === 'FRESH', "the stored result is the current holder's");
 
+// ------------------------------------------------------------------ 2b. storage failures: durable, fenced, bounded, never blocks a hit
+const sm = (suffix: string): AiCacheKey => ({ task: 'decisions', model: `e2e-storage-${tag}:free`, configVersion: 'v1', hash: run.slice(0, 60) + suffix.padStart(4, '0') }); // its own model: isolated engine-level state
+const sa = await store.aiCacheBegin(sm('a'), 120) as any;
+check(await store.aiCacheComplete({ id: sa.id, epoch: sa.epoch }, { ok: 'stored-earlier' }, [], {}) === true, 'an answer is stored before any storage trouble');
+const sb = await store.aiCacheBegin(sm('b'), 120) as any;
+check(await store.aiCacheFailStorage({ id: sb.id, epoch: sb.epoch + 99 }, 'x') === false, 'a wrong/stale epoch cannot record a storage failure');
+check(await store.aiCacheFailStorage({ id: sb.id, epoch: sb.epoch }, 'write_failed') === true, 'the current holder records the storage failure durably');
+check((await store.aiCacheBegin(sm('b'), 120)).state === 'cooldown', 'that input now waits (own cooldown, not an input-level failure)');
+const sc = await store.aiCacheBegin(sm('c'), 120);
+check(sc.state === 'storage_backoff', `a different input that would need a live call waits for the engine-level backoff (${sc.state})`);
+check((await store.aiCacheBegin(sm('a'), 120)).state === 'hit', 'but a stored answer is still served (cache first)');
+check((await store.aiCacheBegin({ ...sm('c'), model: `e2e-other-${tag}:free` }, 120)).state === 'claimed', 'and another model is unaffected');
+
 // ------------------------------------------------------------------ 3. provenance: a vanished cache link must not cost any row its provenance
-const tag = run.slice(0, 8);
 await store.upsertRecords([1, 2].map((i) => ({
   source_id: 'github', source_record_id: `e2e-${tag}-${i}`, discussion_key: `github:e2e-${tag}-${i}`, kind: 'issue' as const, url: `https://example.org/e2e/${tag}/${i}`,
   title: `e2e ${i}`, excerpt: `I wish there was a tool for e2e ${i}. It is frustrating.`, author_ref: null, parent_source_record_id: null, published_at: new Date().toISOString(),
@@ -82,6 +95,7 @@ const fns: Array<[string, Record<string, unknown>]> = [
   ['dr_ai_cache_begin', { p_task: 'decisions', p_hash: run, p_model: 'm', p_version: 'v' }],
   ['dr_ai_cache_complete', { p_id: leaseA.id, p_epoch: leaseA.epoch, p_result: { x: 1 } }],
   ['dr_ai_cache_fail', { p_id: leaseA.id, p_epoch: leaseA.epoch }],
+  ['dr_ai_cache_fail_storage', { p_id: leaseA.id, p_epoch: leaseA.epoch }],
   ['dr_ai_cache_abandon', { p_id: leaseA.id, p_epoch: leaseA.epoch }],
   ['dr_ai_cache_invalidate', { p_id: '00000000-0000-0000-0000-000000000000' }],
   ['dr_ai_cache_prune', { p_older_than_days: 365 }],

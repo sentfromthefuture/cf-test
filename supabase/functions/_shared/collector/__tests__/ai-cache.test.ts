@@ -151,15 +151,18 @@ test('a service-level failure releases the lease without blaming the input, so i
   assert.equal(store.aiCache.size, 0, 'an unknown error is treated as the service\'s problem');
 });
 
-test('a cache write failure does not lose a valid answer or leave the input locked', async () => {
+test('a cache write failure does not lose a valid answer, and is remembered durably instead of leaving a lock', async () => {
   class CompleteFails extends MemoryStore { async aiCacheComplete(): Promise<boolean> { throw new Error('write failed'); } }
   const store = new CompleteFails();
   const { state, compute } = counted();
   const out = await cachedCompute(store, key(), compute, revive, { log: silentLog });
   assert.equal(out.status, 'computed');
   assert.equal(out.status === 'computed' && out.stored, false);
-  assert.equal(store.aiCache.size, 0, 'lease released, nothing stored');
   assert.equal(state.n, 1);
+  const e = [...store.aiCache.values()][0];
+  assert.deepEqual({ status: e.status, kind: e.failureKind, result: e.result, storage: e.storageFailures, input: e.failedAttempts }, { status: 'failed', kind: 'storage', result: null, storage: 1, input: 0 }, 'a durable STORAGE marker, never a result, never an input failure');
+  assert.equal(e.leaseUntil, null, 'no lease is left locked');
+  assert.equal(store.aiCacheCalls.failStorage, 1);
 });
 
 test('a stored result that no longer validates is dropped and recomputed exactly once', async () => {
@@ -332,4 +335,114 @@ test('invalidate can remove only a stored result, never a pending lease or a fai
   await store2.aiCacheComplete({ id: c.id, epoch: c.epoch }, { ok: 1 }, [], {});
   await store2.aiCacheInvalidate(c.id);
   assert.equal(store2.aiCache.size, 0, 'a stored result can be invalidated');
+});
+
+// ------------------------------------------------------------------ durable, bounded backoff for cache-STORAGE failures
+class WriteFails extends MemoryStore { broken = true; async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (this.broken) throw new Error('write failed'); return super.aiCacheComplete(l, r, c, u); } }
+
+test('STORAGE BACKOFF: a failed write blocks a re-request of that input, and any new live request, until the window passes', async () => {
+  const store = new WriteFails();
+  let now = 1_000_000; store.clock = () => now;
+  const { state, compute } = counted();
+  await cachedCompute(store, key(), compute, revive, { log: silentLog });
+  assert.equal(state.n, 1);
+  const again = await cachedCompute(store, key(), compute, revive);
+  assert.equal(again.status, 'cooldown', 'the same input waits (it is cooling down)');
+  const other = await cachedCompute(store, key({ hash: 'b'.repeat(64) }), compute, revive);
+  assert.equal(other.status, 'deferred');
+  assert.equal(other.status === 'deferred' && other.reason, 'cache storage backoff', 'a different input that would need a live call waits for the engine-level backoff');
+  assert.equal(state.n, 1, 'no further live request');
+  assert.equal(store.aiCache.size, 1, 'and no lease was taken for the other input');
+  now += 4 * 60_000;
+  assert.equal((await cachedCompute(store, key({ hash: 'b'.repeat(64) }), compute, revive)).status, 'deferred', 'still inside the 5-minute window');
+  now += 2 * 60_000;
+  store.broken = false;
+  assert.equal((await cachedCompute(store, key({ hash: 'b'.repeat(64) }), compute, revive)).status, 'computed', 'window passed: a probe request is allowed');
+});
+
+test('STORAGE BACKOFF: the cache is still served during the backoff (cache first)', async () => {
+  const store = new WriteFails();
+  store.broken = false;
+  const { state, compute } = counted();
+  await cachedCompute(store, key(), compute, revive); // stored fine
+  store.broken = true;
+  await cachedCompute(store, key({ hash: 'c'.repeat(64) }), compute, revive, { log: silentLog }); // this write fails -> engine backoff
+  const hit = await cachedCompute(store, key(), compute, revive);
+  assert.equal(hit.status, 'hit', 'a stored answer is served even while the engine is backing off');
+  assert.equal(state.n, 2);
+  assert.equal((await cachedCompute(store, key({ hash: 'd'.repeat(64) }), compute, revive)).status, 'deferred');
+});
+
+test('STORAGE BACKOFF: it is per model and per task, and it escalates then caps', async () => {
+  const store = new WriteFails();
+  let now = 5_000_000; store.clock = () => now;
+  const { compute } = counted();
+  await cachedCompute(store, key(), compute, revive, { log: silentLog });
+  assert.equal((await cachedCompute(store, key({ hash: 'b'.repeat(64), model: 'other:free' }), compute, revive, { log: silentLog })).status, 'computed', 'another model is unaffected');
+  assert.equal((await cachedCompute(store, key({ hash: 'b'.repeat(64), task: 'summary' }), compute, revive, { log: silentLog })).status, 'computed', 'another task is unaffected');
+  const windows: number[] = [];
+  for (let i = 0; i < 12; i++) {
+    const h = store.aiHealth.get('decisions|parallel/decisions-fast:free')!;
+    windows.push(Math.round((h.unhealthyUntil! - now) / 60_000));
+    now = h.unhealthyUntil! + 1000;
+    await cachedCompute(store, key({ hash: String(i).padStart(64, 'e') }), compute, revive, { log: silentLog });
+  }
+  assert.deepEqual(windows.slice(0, 5), [5, 10, 20, 40, 80], 'each consecutive storage failure doubles the engine backoff');
+  assert.ok(Math.max(...windows) <= 360, 'and it is capped at 6 hours');
+  assert.equal(windows[windows.length - 1], 360);
+});
+
+test('STORAGE BACKOFF: it is separate from input-level failures (own counters, own breaker, never penalises the record)', async () => {
+  const store = new WriteFails();
+  store.broken = false;
+  const { compute } = counted();
+  await assert.rejects(cachedCompute(store, key(), async () => { throw new AiCallError('bad', 'invalid_response'); }, revive), AiCallError);
+  assert.equal(store.aiHealth.size, 0, 'an unusable answer never trips the storage breaker');
+  const e1 = [...store.aiCache.values()][0];
+  assert.deepEqual({ kind: e1.failureKind, input: e1.failedAttempts, storage: e1.storageFailures }, { kind: 'input', input: 1, storage: 0 });
+  store.broken = true;
+  await cachedCompute(store, key({ hash: 'b'.repeat(64) }), compute, revive, { log: silentLog });
+  const e2 = [...store.aiCache.values()].find((x) => x.failureKind === 'storage')!;
+  assert.deepEqual({ input: e2.failedAttempts, storage: e2.storageFailures }, { input: 0, storage: 1 });
+});
+
+test('STORAGE BACKOFF: recovery. One successful write ends the backoff and releases storage cooldowns, but not input-level ones', async () => {
+  const store = new WriteFails();
+  let now = 9_000_000; store.clock = () => now;
+  const { compute } = counted();
+  store.broken = false;
+  await assert.rejects(cachedCompute(store, key({ hash: '1'.repeat(64) }), async () => { throw new AiCallError('bad', 'invalid_response'); }, revive), AiCallError); // input-level cooldown 1h
+  store.broken = true;
+  await cachedCompute(store, key({ hash: '2'.repeat(64) }), compute, revive, { log: silentLog }); // storage cooldown 15m, engine 5m
+  now += 6 * 60_000;
+  store.broken = false; // storage heals
+  assert.equal((await cachedCompute(store, key({ hash: '2'.repeat(64) }), compute, revive)).status, 'cooldown', 'before the probe the storage-failed input still waits');
+  assert.equal((await cachedCompute(store, key({ hash: '3'.repeat(64) }), compute, revive)).status, 'computed', 'a probe (a different input) is stored');
+  assert.equal(store.aiHealth.get('decisions|parallel/decisions-fast:free')!.unhealthyUntil, null, 'engine backoff cleared');
+  assert.equal((await cachedCompute(store, key({ hash: '2'.repeat(64) }), compute, revive)).status, 'computed', 'the storage-failed input is retryable immediately, not after its 15 minutes');
+  assert.equal((await cachedCompute(store, key({ hash: '1'.repeat(64) }), compute, revive)).status, 'cooldown', 'the input-level cooldown is NOT released by a storage recovery');
+});
+
+test('STORAGE BACKOFF: fenced. A stale holder cannot record a storage failure against a newer lease', async () => {
+  const store = new MemoryStore();
+  let now = 2_000_000; store.clock = () => now;
+  const a = await store.aiCacheBegin(key(), 120) as { id: string; epoch: number };
+  now += 121_000;
+  const b = await store.aiCacheBegin(key(), 120) as { id: string; epoch: number };
+  assert.equal(await store.aiCacheFailStorage({ id: a.id, epoch: a.epoch }, 'write_failed'), false, 'the stale holder is refused');
+  const e = [...store.aiCache.values()][0];
+  assert.deepEqual({ status: e.status, epoch: e.epoch, storage: e.storageFailures }, { status: 'pending', epoch: b.epoch, storage: 0 }, 'the new lease is untouched');
+  assert.equal(store.aiHealth.size, 0, 'and no engine-level trace is left');
+  assert.equal(await store.aiCacheComplete({ id: b.id, epoch: b.epoch }, { ok: 1 }, [], {}), true);
+  assert.equal(await store.aiCacheFailStorage({ id: b.id, epoch: b.epoch }, 'late'), false, 'a stored result is never overwritten by a failure marker');
+});
+
+test('STORAGE BACKOFF: if even the failure cannot be recorded, the lease is released and the call still returns normally', async () => {
+  class Unreachable extends MemoryStore { failAiCacheStorageRecordingX = true; async aiCacheComplete(): Promise<boolean> { throw new Error('write failed'); } async aiCacheFailStorage(): Promise<boolean> { throw new Error('cannot record'); } }
+  const store = new Unreachable();
+  const { compute } = counted();
+  const out = await cachedCompute(store, key(), compute, revive, { log: silentLog });
+  assert.equal(out.status === 'computed' && out.notStored, 'write_failed');
+  assert.equal(store.aiCache.size, 0, 'the lease was released (abandon) as a last resort');
+  assert.equal(store.aiCacheCalls.abandon, 1);
 });

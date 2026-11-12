@@ -83,7 +83,9 @@ export type CacheBegin =
   | { state: 'hit'; id: string; result: unknown; citations: unknown; usage: unknown }
   | { state: 'claimed'; id: string; epoch: number }
   | { state: 'busy'; id?: string }
-  | { state: 'cooldown'; id?: string; retry_after?: string };
+  | { state: 'cooldown'; id?: string; retry_after?: string }
+  /** The cache could not STORE recent answers (durable, engine-level, shared across invocations): no new LIVE request until `retry_after`. Never applies to a hit. */
+  | { state: 'storage_backoff'; retry_after?: string };
 
 /** What the cache needs from persistence. SupabaseStore implements it with the dr_ai_cache_* functions. */
 export interface AiCacheStore {
@@ -94,6 +96,11 @@ export interface AiCacheStore {
   aiCacheFail(lease: AiLease, reason: string): Promise<void>;
   /** Fenced like aiCacheComplete: a worker that lost its lease cannot release or delete the new holder's. */
   aiCacheAbandon(lease: AiLease): Promise<void>;
+  /**
+   * A valid answer could not be STORED. Records a durable, bounded backoff for this input and for the engine, kept separate from
+   * input-level failures, so repeated storage trouble cannot turn every scheduled run into another live request. Fenced like complete.
+   */
+  aiCacheFailStorage(lease: AiLease, reason: string): Promise<boolean>;
   aiCacheInvalidate(id: string): Promise<void>;
 }
 
@@ -122,7 +129,7 @@ export type CachedOutcome<T> =
   | { status: 'busy'; cacheId: string | null }
   | { status: 'cooldown'; cacheId: string | null }
   /** A cache MISS that the caller's gate refused to turn into a live request. The lease was released; nothing was recorded against the input. */
-  | { status: 'deferred'; cacheId: string; reason: string };
+  | { status: 'deferred'; cacheId: string | null; reason: string };
 
 /**
  * Cache-first execution of one AI request. The cache is ALWAYS consulted first; `gate` (budget, time, circuit breaker) applies only when
@@ -132,7 +139,9 @@ export type CachedOutcome<T> =
  *               validated result is stored. On an input-level failure (invalid/refused/rejected) a failure marker with a growing cooldown is
  *               stored (never a result). On a service-level failure the lease is simply released.
  *  busy      -> another worker is computing the same input: do not call the model.
- *  cooldown  -> this input failed recently: do not call the model yet.
+ *  cooldown  -> this input failed recently (an unusable answer, or a cache write that failed): do not call the model yet.
+ *  storage_backoff -> the cache has recently been unable to store answers (shared, durable): a miss is `deferred` without taking a lease;
+ *               hits are unaffected.
  * Every write after a claim presents the lease's fencing epoch, so a worker whose lease expired and was taken over can no longer store,
  * fail or release the entry. `compute` errors are rethrown as AiCallError so the caller can decide whether to stop the engine for the run;
  * a failing cache store surfaces as AiCacheError.
@@ -162,6 +171,7 @@ export async function cachedCompute<T>(
       }
       continue;
     }
+    if (b.state === 'storage_backoff') return { status: 'deferred', cacheId: null, reason: 'cache storage backoff' };
     if (b.state === 'busy') return { status: 'busy', cacheId: b.id ?? null };
     if (b.state === 'cooldown') return { status: 'cooldown', cacheId: b.id ?? null };
 
@@ -190,10 +200,16 @@ export async function cachedCompute<T>(
         o.log?.warn('AI result not stored: the lease was lost to a newer holder (or the entry was already completed)', { task: key.task });
       }
     } catch (e) {
-      // The answer is valid and is still returned, but it is NOT durable. The lease is released (fenced) so the next run can retry or reuse.
+      // The answer is valid and is still returned, but it is NOT durable. Record that DURABLY (fenced), with a bounded backoff kept separate
+      // from input-level failures: merely releasing the lease would leave no trace, and the next scheduled run would spend another live
+      // request on the same input. If even that write fails the storage is unreachable, so `begin` will fail too and nothing is spent.
       notStored = 'write_failed';
       o.log?.warn('AI cache write failed', { task: key.task, error: safeError(e) });
-      await store.aiCacheAbandon(lease).catch(() => undefined);
+      try {
+        await store.aiCacheFailStorage(lease, 'write_failed');
+      } catch {
+        await store.aiCacheAbandon(lease).catch(() => undefined); // last resort: at least release the lease
+      }
     }
     return { status: 'computed', value: c.value, cacheId: lease.id, stored, ...(notStored ? { notStored } : {}) };
   }

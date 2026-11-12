@@ -103,7 +103,7 @@ test('with no AI configured, nothing is called, cached or recorded (the producti
   assert.equal(store.aiCache.size, 0);
   assert.equal(store.aiUsage.length, 0);
   assert.equal(store.signalAi.size, 0);
-  assert.deepEqual(store.aiCacheCalls, { begin: 0, complete: 0, fail: 0, abandon: 0, invalidate: 0 });
+  assert.deepEqual(store.aiCacheCalls, { begin: 0, complete: 0, fail: 0, abandon: 0, invalidate: 0, failStorage: 0 });
 });
 
 test('test mode drops BOTH engines: no request can be made even when they are configured', async () => {
@@ -365,6 +365,7 @@ const provenanceIsDurable = (store: MemoryStore) => {
 test('DURABILITY: if the cache write fails after a valid answer, nothing is persisted and the record stays pending', async () => {
   class WriteFails extends MemoryStore { broken = true; async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (this.broken) throw new Error('db hiccup'); return super.aiCacheComplete(l, r, c, u); } }
   const store = await seeded(new WriteFails(), 3);
+  let now = 70_000_000; store.clock = () => now;
   const net = scriptedHttp(() => decisionsBody());
   const s1 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
   assert.equal(s1.analysed, 0, 'no record was marked done');
@@ -378,10 +379,17 @@ test('DURABILITY: if the cache write fails after a valid answer, nothing is pers
   assert.ok([...store.records.values()].every((r) => r.attempts === 0));
   assert.equal(store.locks.size, 0);
 
-  store.broken = false; // the database recovers
+  // the database recovers, but the failed write was recorded DURABLY: an immediate retry is held back (that is the point)
+  store.broken = false;
   const s2 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
-  assert.equal(s2.analysed, 3, 'the next run completes every record');
-  assert.equal(net.calls.length, 4, 'safe retry: one live request per record, none repeated');
+  assert.equal(net.calls.length, 1, 'no request while the backoff window is open');
+  assert.equal(s2.analysed, 0);
+  assert.equal(count(store, 'pending'), 3);
+  now += 6 * 60_000; // the 5-minute engine window has passed
+  const s3 = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(s3.analysed, 3, 'storage works again: the probe succeeds, which also releases the cooled-down record, so all three recover in this one run');
+  assert.equal(count(store, 'done'), 3);
+  assert.equal(net.calls.length, 4, 'safe retry: exactly one live request per record, none repeated after recovery');
   assert.equal(store.signalAi.size, 3);
   assert.ok(provenanceIsDurable(store), 'every provenance row links to a stored, non-empty cache entry');
 });
@@ -428,4 +436,88 @@ test('DURABILITY: a lost lease on a stale worker never blocks its neighbours or 
   assert.equal(s.failed, 0);
   assert.equal(store.signalAi.size, 0, 'no provenance without a durable cache entry');
   assert.equal(store.locks.size, 0);
+});
+
+// ------------------------------------------------------------------ CROSS-RUN: repeated cache-write failures must not mean repeated requests
+test('CROSS-RUN: repeated cache-write failures across independent runs make a bounded number of live requests, then storage recovers', async () => {
+  class WriteFails extends MemoryStore { broken = true; async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (this.broken) throw new Error('write failed'); return super.aiCacheComplete(l, r, c, u); } }
+  const store = await seeded(new WriteFails(), 6);
+  let now = 100_000_000; store.clock = () => now;
+  const net = scriptedHttp(() => decisionsBody());
+  // Every iteration is an INDEPENDENT invocation: a brand-new config and run state (nothing in memory carries over). Only the store
+  // (the database) persists, exactly as between two scheduled Edge Function invocations.
+  const invoke = () => runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  const RUNS = 192, EVERY = 15 * 60_000; // a run every 15 minutes for 48 hours
+  const requestTimes: number[] = [];
+  for (let i = 0; i < RUNS; i++) {
+    const before = net.calls.length;
+    const stats = await invoke();
+    if (net.calls.length > before) requestTimes.push(Math.round((now - 100_000_000) / 60_000));
+    assert.equal(stats.analysed, 0, 'nothing is persisted while storage keeps failing');
+    now += EVERY;
+  }
+  const whileBroken = net.calls.length;
+  assert.ok(whileBroken >= 3, `the engine still PROBES (${whileBroken} requests), so it can notice recovery`);
+  assert.ok(whileBroken <= 16, `requests are bounded: ${whileBroken} in 48 h across ${RUNS} runs (without durable backoff this was one per run = ${RUNS}); request minutes: ${requestTimes.join(',')}`);
+  const gaps = requestTimes.slice(1).map((t, i) => t - requestTimes[i]);
+  assert.ok(gaps.every((g, i) => i === 0 || g >= gaps[i - 1] - 15), `the gaps between requests keep growing (backoff), got ${gaps.join(',')}`);
+  assert.equal(store.signals.size, 0, 'no signal was created for an answer that was not durably cached');
+  assert.equal(store.signalAi.size, 0, 'and no provenance row');
+  assert.equal(count(store, 'pending'), 6, 'every record is still pending');
+  assert.ok([...store.records.values()].every((r) => r.attempts === 0), 'a cache problem is never held against a record');
+  assert.ok([...store.aiCache.values()].every((e) => e.status === 'failed' && e.failureKind === 'storage' && e.result === null && e.failedAttempts === 0), 'only durable STORAGE markers exist; no result and no input-level failure was recorded');
+  assert.equal(store.aiHealth.get('decisions|parallel/decisions-fast:free')!.storageFailures, whileBroken, 'the engine-level breaker counted every failed write');
+
+  // storage becomes healthy again
+  store.broken = false;
+  now += 6 * 3600_000 + 60_000; // beyond the longest engine backoff (6 h)
+  let recoveredAfter = -1;
+  for (let i = 0; i < 6 && recoveredAfter < 0; i++) {
+    await invoke();
+    if (count(store, 'done') === 6) recoveredAfter = i + 1;
+    now += EVERY;
+  }
+  assert.ok(recoveredAfter > 0 && recoveredAfter <= 3, `all six records recovered within ${recoveredAfter} run(s) of storage becoming healthy`);
+  assert.equal(net.calls.length - whileBroken, 6, 'recovery cost exactly one live request per record; none repeated');
+  assert.equal(store.signalAi.size, 6);
+  assert.ok(provenanceIsDurable(store), 'every provenance row now links to a stored, non-empty cache entry');
+  assert.equal(store.aiHealth.get('decisions|parallel/decisions-fast:free')!.unhealthyUntil, null, 'the breaker reset');
+  const settled = net.calls.length;
+  for (let i = 0; i < 5; i++) { await invoke(); now += EVERY; }
+  assert.equal(net.calls.length, settled, 'afterwards nothing is re-requested');
+});
+
+test('CROSS-RUN: a transient storage outage heals by itself with a handful of requests, and never creates records meanwhile', async () => {
+  let failures = 2; // the first two writes fail, then the database is fine again (no manual toggle)
+  class Flaky extends MemoryStore { async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (failures > 0) { failures--; throw new Error('transient'); } return super.aiCacheComplete(l, r, c, u); } }
+  const store = await seeded(new Flaky(), 4);
+  let now = 200_000_000; store.clock = () => now;
+  const net = scriptedHttp(() => decisionsBody());
+  let doneAt = -1;
+  for (let i = 0; i < 40; i++) {
+    await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+    now += 15 * 60_000;
+    if (doneAt < 0 && count(store, 'done') === 4) doneAt = i + 1;
+  }
+  assert.ok(doneAt > 0, 'all four records completed without any manual intervention');
+  assert.ok(net.calls.length <= 4 + 2 + 2, `bounded: ${net.calls.length} requests for 4 records and 2 failed writes`);
+  assert.ok(provenanceIsDurable(store));
+});
+
+test('CROSS-RUN: cached answers keep flowing while storage is failing for new ones', async () => {
+  class Selective extends MemoryStore { failFor = new Set<string>(); async aiCacheComplete(l: any, r: any, c: any, u: any): Promise<boolean> { if (this.failFor.size && [...this.aiCache.values()].find((e) => e.id === l.id) && this.failFor.has('all')) throw new Error('write failed'); return super.aiCacheComplete(l, r, c, u); } }
+  const store = await seeded(new Selective(), 3); // r0..r2 are written fine
+  let now = 300_000_000; store.clock = () => now;
+  const net = scriptedHttp(() => decisionsBody());
+  await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(count(store, 'done'), 3);
+  store.failFor.add('all'); // from now on writes fail
+  await store.upsertRecords([rec('github', 'n0')]);
+  await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) })); // n0's answer cannot be stored -> backoff
+  requeue(store); // r0..r2 (+ n0) go back to pending, e.g. via a reanalysis pass
+  const before = net.calls.length;
+  const s = await runAnalysis(deps(store, { decisions: decisionsCfg(net.http) }));
+  assert.equal(net.calls.length, before, 'no live request during the backoff');
+  assert.equal(s.decisions!.cacheHits, 3, 'the three cached answers are still served');
+  assert.equal(s.analysed, 3);
 });

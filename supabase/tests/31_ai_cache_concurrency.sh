@@ -2,7 +2,7 @@
 # Concurrency tests for the dr_ai_cache lease: N independent database sessions race for the SAME cache identity.
 #   1. claim race     exactly one session may be told to compute ("claimed"); every other one must be told to wait ("busy").
 #   2. takeover race  when a holder's lease has expired, exactly one session takes over, with a NEWER fencing epoch.
-#   3. fencing        a burst of stale-holder complete/fail/abandon calls, from many sessions at once, must change nothing; the new
+#   3. fencing        a burst of stale-holder complete/fail/fail_storage/abandon calls, from many sessions at once, must change nothing; the new
 #                     holder's lease survives and its result is the one that is stored - even when stale calls race it.
 # Usage: 31_ai_cache_concurrency.sh <database>   (psql connection settings come from the usual PG* environment variables)
 # Run against a disposable database only. Pure SQL: no external service is called.
@@ -48,12 +48,13 @@ check "the rest told to wait" "$busy" $((N - 1))
 check "the new holder has a NEWER epoch" "$([ -n "$epochB" ] && [ "$epochB" -gt "$epochA" ] && echo yes || echo no)" yes
 
 # ------------------------------------------------------------------ 3. fencing under concurrency
-echo "3a. stale burst: $N sessions act as the expired worker A (complete / fail / abandon with A's old epoch)"
+echo "3a. stale burst: $N sessions act as the expired worker A (complete / fail / fail_storage / abandon with A's old epoch)"
 for i in $(seq 1 "$N"); do
-  case $((i % 3)) in
+  case $((i % 4)) in
     0) sql="select public.dr_ai_cache_complete('$idA', $epochA, '{\"from\":\"stale-$i\"}'::jsonb)" ;;
     1) sql="select public.dr_ai_cache_fail('$idA', $epochA, 'stale-$i')" ;;
     2) sql="select 'abandon-called' from (select public.dr_ai_cache_abandon('$idA', $epochA)) t" ;;
+    3) sql="select public.dr_ai_cache_fail_storage('$idA', $epochA, 'stale-$i')" ;;
   esac
   ( q "$sql" > "$dir/s$i.out" 2> "$dir/s$i.err" ) &
 done
@@ -66,6 +67,7 @@ read -r st ep fa res < <(q "select status, lease_epoch, failed_attempts, coalesc
 check "the new holder's lease is untouched (still pending)" "$st" pending
 check "its epoch is unchanged" "$ep" "$epochB"
 check "no failure was recorded against it" "$fa" 0
+check "no STORAGE failure or engine-level backoff was recorded either" "$(q "select (select storage_failures from public.dr_ai_cache where id = '$idA') + (select count(*) from public.dr_ai_health where model = 'concurrency-test:free')")" 0
 check "no result was stored by a stale worker" "$res" null
 
 echo "3b. the current holder completes while $N stale sessions race it"

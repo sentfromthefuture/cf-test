@@ -13,7 +13,9 @@
 --             FENCING TOKEN (lease_epoch); complete/fail/abandon only act for the holder of the CURRENT token, so a worker whose
 --             lease expired and was taken over can no longer finish, fail or release the entry
 --   succeeded validated result stored; reused forever until the identity changes (see invalidation rules in docs/AI_ARCHITECTURE.md)
---   failed    the INPUT produced an unusable answer (invalid/refused/bad request); no result stored; retried only after a growing cooldown
+--   failed    no result stored; retried only after a growing cooldown. failure_kind says why: 'input' (the INPUT produced an unusable
+--             answer: invalid/refused/bad request) or 'storage' (the answer was fine but the cache could not store it). The two are
+--             counted separately (failed_attempts vs storage_failures) and back off independently
 create table if not exists public.dr_ai_cache (
   id              uuid primary key default gen_random_uuid(),
   task            text not null check (task in ('decisions', 'summary')),
@@ -27,7 +29,9 @@ create table if not exists public.dr_ai_cache (
   citations       jsonb not null default '[]'::jsonb,
   usage           jsonb not null default '{}'::jsonb,
   hit_count       integer not null default 0,
-  failed_attempts integer not null default 0,
+  failed_attempts integer not null default 0,   -- input-level failures only
+  storage_failures integer not null default 0,  -- cache-storage failures only (a valid answer that could not be stored)
+  failure_kind    text check (failure_kind in ('input', 'storage')),
   retry_after     timestamptz,
   last_failure    text,
   created_at      timestamptz not null default now(),
@@ -41,11 +45,27 @@ create table if not exists public.dr_ai_cache (
 -- unfenced function signatures that revision created. Add the column, and remove ONLY those superseded signatures (they exist nowhere else:
 -- they were never on main and nothing pre-existing depends on them) so an unfenced complete/fail/abandon can never be called.
 alter table public.dr_ai_cache add column if not exists lease_epoch bigint not null default 0;
+alter table public.dr_ai_cache add column if not exists storage_failures integer not null default 0;
+alter table public.dr_ai_cache add column if not exists failure_kind text check (failure_kind in ('input', 'storage'));
 drop function if exists public.dr_ai_cache_complete(uuid, jsonb, jsonb, jsonb);
 drop function if exists public.dr_ai_cache_fail(uuid, text);
 drop function if exists public.dr_ai_cache_abandon(uuid);
 
 create index if not exists dr_ai_cache_housekeeping_idx on public.dr_ai_cache (status, coalesce(last_hit_at, completed_at, created_at));
+
+-- Engine-level circuit breaker for cache-STORAGE failures, shared by every Edge Function invocation. The first failed write blocks any
+-- request that would need a LIVE model call for 5 minutes; each further consecutive failure doubles that (cap 6 hours); one successful
+-- write resets it. It blocks only live calls: cached results are always served. Keeping it in the database is the point: an in-memory
+-- counter would be lost when the invocation ends, and the next scheduled run would simply spend another request.
+create table if not exists public.dr_ai_health (
+  task             text not null check (task in ('decisions', 'summary')),
+  model            text not null,
+  storage_failures integer not null default 0,   -- consecutive cache-storage failures (any input); reset by a successful write
+  unhealthy_until  timestamptz,
+  last_failure_at  timestamptz,
+  updated_at       timestamptz not null default now(),
+  primary key (task, model)
+);
 
 -- Per-engine, per-day counters (live calls, outcomes, cache effectiveness, tokens, provider-REPORTED cost).
 -- reported_cost_usd is only what the provider said; cost_reported_calls shows how many calls reported one, because
@@ -87,7 +107,8 @@ create index if not exists dr_signal_ai_cache_idx on public.dr_signal_ai (cache_
 alter table public.dr_ai_cache enable row level security;
 alter table public.dr_ai_usage enable row level security;
 alter table public.dr_signal_ai enable row level security;
-revoke all on public.dr_ai_cache, public.dr_ai_usage, public.dr_signal_ai from anon, authenticated;
+alter table public.dr_ai_health enable row level security;
+revoke all on public.dr_ai_cache, public.dr_ai_usage, public.dr_signal_ai, public.dr_ai_health from anon, authenticated;
 
 -- ================================================================= cache state machine
 -- Atomically decides what the caller may do for this identity:
@@ -96,14 +117,24 @@ revoke all on public.dr_ai_cache, public.dr_ai_usage, public.dr_signal_ai from a
 --             presenting that epoch
 --   busy      another worker holds a fresh lease: do NOT call the model
 --   cooldown  an earlier attempt on this input failed; do not retry before retry_after
+--   storage_backoff  the cache could not STORE recent answers (dr_ai_health): no new LIVE request until retry_after. Never blocks a hit.
 create or replace function public.dr_ai_cache_begin(
   p_task text, p_hash text, p_model text, p_version text, p_lease_seconds integer default 120)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
 declare
   v public.dr_ai_cache%rowtype;
   v_epoch bigint;
+  v_gate timestamptz;
   v_lease interval := make_interval(secs => least(greatest(coalesce(p_lease_seconds, 120), 10), 900));
 begin
+  -- Engine-level storage backoff. It can only ever stop a request that would need a LIVE call: an existing entry still goes through the
+  -- hit / cooldown / busy logic below, so cached results keep being served while the backoff is active.
+  select unhealthy_until into v_gate from public.dr_ai_health where task = p_task and model = p_model and unhealthy_until > now();
+  if v_gate is not null and not exists (select 1 from public.dr_ai_cache
+       where task = p_task and input_hash = p_hash and model = p_model and config_version = p_version) then
+    return jsonb_build_object('state', 'storage_backoff', 'retry_after', v_gate);
+  end if;
+
   insert into public.dr_ai_cache (task, input_hash, model, config_version, status, lease_until, lease_epoch)
   values (p_task, p_hash, p_model, p_version, 'pending', now() + v_lease, 1)
   on conflict (task, input_hash, model, config_version) do nothing
@@ -131,6 +162,10 @@ begin
     return jsonb_build_object('state', 'busy', 'id', v.id);
   end if;
 
+  if v_gate is not null then
+    return jsonb_build_object('state', 'storage_backoff', 'retry_after', v_gate);   -- would be a live retry: wait out the backoff
+  end if;
+
   -- expired lease (a worker died or is just slow) or a failed row whose cooldown has elapsed: take over, keeping the attempt
   -- history. The epoch moves forward, which fences out every earlier holder of this entry.
   update public.dr_ai_cache set status = 'pending', lease_until = now() + v_lease, lease_epoch = lease_epoch + 1
@@ -145,7 +180,7 @@ end $$;
 create or replace function public.dr_ai_cache_complete(
   p_id uuid, p_epoch bigint, p_result jsonb, p_citations jsonb default '[]'::jsonb, p_usage jsonb default '{}'::jsonb)
 returns boolean language plpgsql security definer set search_path = public, extensions as $$
-declare n integer;
+declare v_task text; v_model text;
 begin
   if p_result is null or jsonb_typeof(p_result) <> 'object' then
     raise exception 'a successful AI result must be a non-null JSON object' using errcode = '22023';
@@ -154,10 +189,19 @@ begin
     status = 'succeeded', result = p_result,
     citations = case when jsonb_typeof(p_citations) = 'array' then p_citations else '[]'::jsonb end,
     usage = case when jsonb_typeof(p_usage) = 'object' then p_usage else '{}'::jsonb end,
-    lease_until = null, retry_after = null, last_failure = null, completed_at = now()
-   where id = p_id and status = 'pending' and lease_epoch = p_epoch;
-  get diagnostics n = row_count;
-  return n > 0;
+    lease_until = null, retry_after = null, last_failure = null, failure_kind = null, completed_at = now()
+   where id = p_id and status = 'pending' and lease_epoch = p_epoch
+  returning task, model into v_task, v_model;
+  if not found then return false; end if;
+  -- A successful write is proof that storage works again: end the engine-level backoff and release the entries that were cooling
+  -- down because of STORAGE failures (never the ones that failed for input-level reasons), so recovery is immediate.
+  update public.dr_ai_health set storage_failures = 0, unhealthy_until = null, updated_at = now()
+   where task = v_task and model = v_model and storage_failures > 0;
+  if found then
+    update public.dr_ai_cache set retry_after = now()
+     where task = v_task and model = v_model and status = 'failed' and failure_kind = 'storage' and retry_after > now();
+  end if;
+  return true;
 end $$;
 
 -- The INPUT produced an unusable answer (invalid response, refusal, rejected request). No result is stored; the row
@@ -168,13 +212,39 @@ returns boolean language plpgsql security definer set search_path = public, exte
 declare n integer;
 begin
   update public.dr_ai_cache set
-    status = 'failed', result = null, lease_until = null,
+    status = 'failed', failure_kind = 'input', result = null, lease_until = null,
     retry_after = now() + make_interval(hours => least(168, (2 ^ least(failed_attempts, 8))::integer)),
     failed_attempts = failed_attempts + 1,
     last_failure = left(coalesce(p_reason, 'failed'), 200)
    where id = p_id and status = 'pending' and lease_epoch = p_epoch;
   get diagnostics n = row_count;
   return n > 0;
+end $$;
+
+-- The answer was fine but the CACHE could not store it (dr_ai_cache_complete failed). Records a durable, bounded backoff that is kept
+-- SEPARATE from input-level failures (storage_failures, not failed_attempts; the record is never penalised): this entry waits 15 min,
+-- 30 min, 1 h ... capped at 7 days, and the engine as a whole (dr_ai_health) waits 5 min, 10 min ... capped at 6 h, so repeated storage
+-- trouble cannot turn every scheduled run into another live request. Fenced like complete(): only the current lease holder can record it,
+-- and it cannot overwrite a result that was in fact stored (the entry is then no longer pending).
+create or replace function public.dr_ai_cache_fail_storage(p_id uuid, p_epoch bigint, p_reason text default null)
+returns boolean language plpgsql security definer set search_path = public, extensions as $$
+declare v_task text; v_model text;
+begin
+  update public.dr_ai_cache set
+    status = 'failed', failure_kind = 'storage', result = null, lease_until = null,
+    retry_after = now() + least(interval '168 hours', interval '15 minutes' * (2 ^ least(storage_failures, 10))),
+    storage_failures = storage_failures + 1,
+    last_failure = left('storage: ' || coalesce(p_reason, 'write_failed'), 200)
+   where id = p_id and status = 'pending' and lease_epoch = p_epoch
+  returning task, model into v_task, v_model;
+  if not found then return false; end if;
+  insert into public.dr_ai_health as h (task, model, storage_failures, unhealthy_until, last_failure_at)
+  values (v_task, v_model, 1, now() + interval '5 minutes', now())
+  on conflict (task, model) do update set
+    storage_failures = h.storage_failures + 1,
+    unhealthy_until = now() + least(interval '6 hours', interval '5 minutes' * (2 ^ least(h.storage_failures, 7))),
+    last_failure_at = now(), updated_at = now();
+  return true;
 end $$;
 
 -- The SERVICE had a problem (rate limit, outage, bad credentials), not the input: release the lease without recording
@@ -184,8 +254,8 @@ returns void language plpgsql security definer set search_path = public, extensi
 begin
   -- Fenced: only the CURRENT lease holder can release. A stale worker must not delete or reset a newer worker's lease.
   update public.dr_ai_cache set status = 'failed', lease_until = null, retry_after = now()
-   where id = p_id and status = 'pending' and lease_epoch = p_epoch and failed_attempts > 0;   -- keep earlier failure history
-  delete from public.dr_ai_cache where id = p_id and status = 'pending' and lease_epoch = p_epoch and failed_attempts = 0;
+   where id = p_id and status = 'pending' and lease_epoch = p_epoch and (failed_attempts > 0 or storage_failures > 0);   -- keep earlier failure history
+  delete from public.dr_ai_cache where id = p_id and status = 'pending' and lease_epoch = p_epoch and failed_attempts = 0 and storage_failures = 0;
 end $$;
 
 -- A stored result that no longer passes application validation (e.g. schema drift): remove it so it is recomputed once.
@@ -207,6 +277,8 @@ begin
   delete from public.dr_ai_cache where status = 'pending' and lease_until < now() - interval '1 day';
   get diagnostics k = row_count; n := n + k;
   delete from public.dr_ai_cache where status = 'failed' and coalesce(retry_after, created_at) < now() - interval '30 days';
+  get diagnostics k = row_count; n := n + k;
+  delete from public.dr_ai_health where updated_at < now() - interval '30 days' and (unhealthy_until is null or unhealthy_until < now());
   get diagnostics k = row_count; n := n + k;
   return n;
 end $$;
@@ -396,7 +468,7 @@ declare f record;
 begin
   for f in select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid = p.pronamespace
             where n.nspname = 'public' and p.proname in (
-              'dr_ai_cache_begin', 'dr_ai_cache_complete', 'dr_ai_cache_fail', 'dr_ai_cache_abandon', 'dr_ai_cache_invalidate',
+              'dr_ai_cache_begin', 'dr_ai_cache_complete', 'dr_ai_cache_fail', 'dr_ai_cache_fail_storage', 'dr_ai_cache_abandon', 'dr_ai_cache_invalidate',
               'dr_ai_cache_prune', 'dr_ai_note_usage', 'dr_save_signal_ai', 'dr_norm_url', 'dr_cluster_profile') loop
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
     execute format('grant execute on function %s to service_role', f.sig);
