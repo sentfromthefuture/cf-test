@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Database, RefreshCw, Sparkles, ShieldAlert, ExternalLink, CheckCircle2, XCircle, PauseCircle, Ban, Loader2, AlertTriangle } from 'lucide-react';
 import { adminSetSource, SourceInfo, timeAgo, triggerSync } from '../lib/liveData';
 import type { LiveStatus } from '../App';
+import { AiSmokeTestPanel } from './AiSmokeTestPanel';
 
 interface Props {
   sources: SourceInfo[];
@@ -111,6 +112,8 @@ export const DataSourcesView: React.FC<Props> = ({ sources, status, isAdmin, sig
       {message && (
         <div className={`rounded-lg border px-3 py-2 text-xs ${message.ok ? 'border-emerald-800 bg-emerald-950/30 text-emerald-200' : 'border-rose-800 bg-rose-950/30 text-rose-200'}`}>{message.text}</div>
       )}
+
+      {isAdmin && <AiSmokeTestPanel />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {implemented.map((s) => {
