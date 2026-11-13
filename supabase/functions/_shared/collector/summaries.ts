@@ -1,4 +1,4 @@
-// Engine B (LFM3) - cached, optional cluster summaries. Nothing in core analysis depends on this module succeeding.
+// Engine B (summaries) - cached, optional cluster summaries. Nothing in core analysis depends on this module succeeding.
 import { ClusterSummary, OpenRouterConfig, requestClusterSummary, validateSummary } from './ai.ts';
 import { AiCacheStore, aiInputHash, AiUsageCounters, CachedOutcome, cachedCompute, meteredCall } from './ai-common.ts';
 import { Logger } from './types.ts';

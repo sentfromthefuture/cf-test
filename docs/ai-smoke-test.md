@@ -3,7 +3,7 @@
 > **Status:** code and mocked tests only. It has **not** been deployed, and it has **never been invoked** against Supabase project
 > `wgoiukbgrdyjvfpqaipp` or against OpenRouter. Nothing in this change touches production configuration, secrets, cron or data.
 
-A bounded, admin-only diagnostic that exercises **both** optional AI engines (Decisions Fast and LFM3) against a tiny sample of
+A bounded, admin-only diagnostic that exercises **both** optional AI engines (Decisions Fast and the summary engine, ERNIE 5.5 Flash Preview) against a tiny sample of
 **existing** pending records, so they can be verified before normal automated processing is enabled. It is not a collection run.
 
 `POST /functions/v1/collect` with body `{"action":"ai_smoke_test"}` and an **admin JWT**.
@@ -24,7 +24,7 @@ Code: `supabase/functions/_shared/collector/ai-smoke.ts` (logic) and `supabase/f
    returned more. The same 3 are chosen on every run (oldest first), so a re-run is served from the cache.
 5. **Decisions Fast, independently.** Each selected record goes through the production `classifyWithDecisions` (cache first, circuit breaker,
    answer stored before anything is built from it). At most 3 live requests, and the configured `DECISIONS_MAX_PER_RUN` still applies if it is lower.
-6. **LFM3, independently.** One cluster summary over the statements of the same records, through the production `summariseClusterCached`.
+6. **Summaries, independently.** One cluster summary over the statements of the same records, through the production `summariseClusterCached`.
    At most 1 live request. It runs whether or not Decisions succeeded.
 7. **Persistence is verified, not assumed.** Every answered input is re-read through the cache's own read path and must be the same entry
    and still pass validation. Only verified Decisions answers are written to `dr_signal_ai` (the model-output table), through the production
@@ -45,7 +45,7 @@ Code: `supabase/functions/_shared/collector/ai-smoke.ts` (logic) and `supabase/f
 | Never writes clusters or summaries to real clusters | no `assignPendingClusters` / `refreshClusters` / `saveClusterSummary` |
 | Never changes feature flags, secrets or cron | it only reads `env`; it contains no SQL |
 | Free models only | the production validators (`isFreeModelSlug`) are reused |
-| Does not exceed budget silently | the Decisions runner's time gate applies; LFM3 is skipped with < 20 s left |
+| Does not exceed budget silently | the Decisions runner's time gate applies; the summary request is skipped with < 20 s left |
 
 ## Response
 
@@ -63,7 +63,7 @@ Code: `supabase/functions/_shared/collector/ai-smoke.ts` (logic) and `supabase/f
     "usage": { "calls": 3, "successes": 3, "failures": 0, "rateLimited": 0, "httpRequests": 3, "retries": 0, "cacheHits": 0, "cacheMisses": 3,
                "inputTokens": 0, "outputTokens": 0, "reportedCostUsd": 0, "costReportedCalls": 3, "tokensReported": true, "consistent": true, "recorded": "ok" }
   },
-  "lfm3": { "status": "passed", "model": "liquid/lfm-3-1.7b:free", "...": "same shape; output.table is null" },
+  "lfm3": { "status": "passed", "model": "baidu/ernie-5.5-flash-preview:free", "...": "same shape; output.table is null" },
   "elapsedMs": 14873
 }
 ```
@@ -138,7 +138,7 @@ curl -s -X POST "$SUPABASE_URL/functions/v1/collect" -H "authorization: Bearer $
 unset PASSWORD JWT
 ```
 
-**Run 1 (live).** Expect `overall: "passed"`, `records.selected: 3`, `decisions.liveCalls: 3`, `lfm3.liveCalls: 1`, both `cache.verified` full,
+**Run 1 (live).** Expect `overall: "passed"`, `records.selected: 3`, `decisions.liveCalls: 3`, `lfm3.liveCalls: 1` (`lfm3` is the report key of the summary engine; the key name is kept for compatibility), both `cache.verified` full,
 `decisions.output.written: 3`, `usage.recorded: "ok"`, `usage.retries: 0`. It takes roughly 15-60 s (requests are paced 3.5 s apart; free models can be slow).
 
 **Run 2 (immediately after).** Expect `overall: "passed"` again with **`liveCalls: 0` and `cacheHits: 3` / `1`**. This proves the cache serves
@@ -177,7 +177,7 @@ Only after this passes, decide separately (and explicitly) whether to enable nor
 
 An engine can answer and still produce nothing usable. Since these failures all share the kind `invalid_response`, the report adds a reason and
 the numbers that explain it (`finish_reason`, `completion_tokens=<used>/<budget>`, or the first failing `field`). The same facts are logged once
-per unusable response as `LFM3 summary response unusable` (Supabase function logs), with response *shapes and counts only*.
+per unusable response as `Summary response unusable` (Supabase function logs), with response *shapes and counts only*.
 
 | reason | what happened | usual next step |
 |---|---|---|
@@ -217,7 +217,7 @@ delete from public.dr_ai_cache where created_at >= '<time you ran the test>' and
 
 ## Limits of this test (read these)
 
-* **LFM3 is tested on a synthetic cluster.** Summaries belong to real clusters, and writing one would change user-visible output, so the smoke
+* **The summary engine is tested on a synthetic cluster.** Summaries belong to real clusters, and writing one would change user-visible output, so the smoke
   test sends the 3 records' statements as one summary request and verifies the answer in the cache. It does **not** exercise
   `saveClusterSummary` / `dr_clusters`; that existing path is covered by the existing tests only.
 * **Usage persistence is verified by the RPC succeeding plus the counters cross-checking, not by reading `dr_ai_usage` back.** There is no read

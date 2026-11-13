@@ -14,7 +14,7 @@ const DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 const CHAT_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const BOTH: Env = { DECISIONS_ENABLED: 'true', OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: KEY };
 const DECISIONS_ONLY: Env = { DECISIONS_ENABLED: 'true', OPENROUTER_API_KEY: KEY };
-const LFM3_ONLY: Env = { OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: KEY };
+const SUMMARY_ONLY: Env = { OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: KEY };
 
 const summaryJson = {
   title: 'Offline invoicing for small shops', problem_description: 'Shop owners cannot invoice when the connection drops.', target_persona: 'Small shop owners',
@@ -122,7 +122,7 @@ test('one engine misconfigured does not stop the other: only the valid engine is
 
 // ------------------------------------------------------------------------------------------------ each engine on its own
 
-test('Decisions Fast success (LFM3 off): 3 live calls, cached, provenance rows written, usage recorded, and no record changes status', async () => {
+test('Decisions Fast success (summary engine off): 3 live calls, cached, provenance rows written, usage recorded, and no record changes status', async () => {
   const { report, mem, calls, httpCalls } = await run({ env: DECISIONS_ONLY, pending: 5 });
   const d = report.decisions;
   assert.equal(d.status, 'passed');
@@ -132,7 +132,7 @@ test('Decisions Fast success (LFM3 off): 3 live calls, cached, provenance rows w
   assert.deepEqual(d.output, { table: 'dr_signal_ai', expected: 3, written: 3 });
   assert.equal(d.usage.recorded, 'ok');
   assert.equal(report.lfm3.status, 'disabled');
-  assert.equal(report.overall, 'partial', 'LFM3 was not exercised, so the pair is not fully verified');
+  assert.equal(report.overall, 'partial', 'the summary engine was not exercised, so the pair is not fully verified');
   // the real model was only ever addressed at the Decisions endpoint, with the free model, and never at the chat endpoint
   assert.deepEqual(urls(httpCalls), [DECISIONS_URL, DECISIONS_URL, DECISIONS_URL]);
   assert.ok(httpCalls.every((c) => c.body.model === 'parallel/decisions-fast:free' && c.body.provider.allow_fallbacks === false));
@@ -145,17 +145,17 @@ test('Decisions Fast success (LFM3 off): 3 live calls, cached, provenance rows w
   assert.ok(!calls.some((c) => FORBIDDEN.includes(c)));
 });
 
-test('LFM3 success (Decisions off): one summary request, cached and verified, nothing written to clusters', async () => {
-  const { report, mem, httpCalls } = await run({ env: LFM3_ONLY, pending: 5 });
+test('Summary engine success (Decisions off): one summary request, cached and verified, nothing written to clusters', async () => {
+  const { report, mem, httpCalls } = await run({ env: SUMMARY_ONLY, pending: 5 });
   const l = report.lfm3;
   assert.equal(l.status, 'passed');
-  assert.equal(l.model, 'liquid/lfm-3-1.7b:free');
+  assert.equal(l.model, 'baidu/ernie-5.5-flash-preview:free');
   assert.deepEqual([l.attempted, l.succeeded, l.failed, l.notCompleted, l.liveCalls, l.cacheHits], [1, 1, 0, 0, 1, 0]);
   assert.deepEqual(l.cache, { verified: 1, unverified: 0 });
   assert.deepEqual(l.output, { table: null, expected: 0, written: 0 });
   assert.equal(report.decisions.status, 'disabled');
   assert.deepEqual(urls(httpCalls), [CHAT_URL]);
-  assert.equal(httpCalls[0].body.model, 'liquid/lfm-3-1.7b:free');
+  assert.equal(httpCalls[0].body.model, 'baidu/ernie-5.5-flash-preview:free');
   assert.equal(cacheEntries(mem, 'summary').filter((e) => e.status === 'succeeded').length, 1);
   assert.equal(mem.summaries.size, 0, 'no real cluster summary may be written');
   assert.equal(mem.signalAi.size, 0);
@@ -171,8 +171,8 @@ test('both engines succeed: overall passed, exactly 3 + 1 live requests', async 
   assert.equal(report.note, undefined);
 });
 
-test('the engines are independent: LFM3 still runs when Decisions fails, and Decisions still runs when LFM3 fails', async () => {
-  // Decisions rejected (bad key): stops at the first request, LFM3 unaffected
+test('the engines are independent: the summary engine still runs when Decisions fails, and Decisions still runs when it fails', async () => {
+  // Decisions rejected (bad key): stops at the first request, the summary engine unaffected
   const a = await run({ env: BOTH, handler: handler({ decisions: () => { throw new HttpError('HTTP 401: unauthorized', 401); } }) });
   assert.deepEqual(statuses(a.report), ['failed', 'passed']);
   assert.equal(a.report.overall, 'partial');
@@ -183,7 +183,7 @@ test('the engines are independent: LFM3 still runs when Decisions fails, and Dec
   assert.equal(cacheEntries(a.mem, 'decisions').length, 0, 'the lease of the failed attempt is released, leaving no pending cache row');
   assert.equal(a.report.decisions.usage.failures, 1);
 
-  // LFM3 returns something that is not JSON: an unusable answer, recorded with a cooldown (never stored as a result)
+  // The summary engine returns something that is not JSON: an unusable answer, recorded with a cooldown (never stored as a result)
   const b = await run({ env: BOTH, handler: handler({ chat: () => chat('definitely not json') }) });
   assert.deepEqual(statuses(b.report), ['passed', 'failed']);
   assert.equal(b.report.overall, 'partial');
@@ -295,13 +295,13 @@ test('the configured per-run request limit still applies below the ceiling', asy
   assert.match(report.decisions.issue!, /per-run request limit reached/);
 });
 
-test('not enough time left: no live request is started (Decisions), and LFM3 is judged on its own threshold', async () => {
+test('not enough time left: no live request is started (Decisions), and the summary engine is judged on its own threshold', async () => {
   const { report, httpCalls } = await run({ env: BOTH, budgetMs: 30_000 });
   assert.equal(report.decisions.status, 'failed');
   assert.equal(report.decisions.liveCalls, 0);
   assert.match(report.decisions.issue!, /not enough time/);
   assert.deepEqual(urls(httpCalls), [CHAT_URL]);
-  const tiny = await run({ env: LFM3_ONLY, budgetMs: 10_000 });
+  const tiny = await run({ env: SUMMARY_ONLY, budgetMs: 10_000 });
   assert.equal(tiny.report.lfm3.status, 'not_run');
   assert.equal(tiny.httpCalls.length, 0);
 });
@@ -329,8 +329,8 @@ test('cache hit behaviour: a second run costs no live request at all and still v
 
 test('a failed input is not re-sent while it is cooling down', async () => {
   const mem = seeded(5);
-  await run({ env: LFM3_ONLY, mem, handler: () => chat('not json') });
-  const again = await run({ env: LFM3_ONLY, mem });
+  await run({ env: SUMMARY_ONLY, mem, handler: () => chat('not json') });
+  const again = await run({ env: SUMMARY_ONLY, mem });
   assert.equal(again.httpCalls.length, 0);
   assert.equal(again.report.lfm3.status, 'failed');
   assert.match(again.report.lfm3.issue!, /cooling down/);
@@ -379,7 +379,7 @@ test('a verification read that finds the entry busy, or that throws, counts as u
     for (const e of busy.aiCache.values()) Object.assign(e, { status: 'pending', result: null, leaseUntil: Date.now() + 60_000 });
     return ok;
   };
-  const a = await run({ env: LFM3_ONLY, mem: busy });
+  const a = await run({ env: SUMMARY_ONLY, mem: busy });
   assert.deepEqual(a.report.lfm3.cache, { verified: 0, unverified: 1 });
   assert.equal(a.report.lfm3.status, 'partial');
 
@@ -466,7 +466,7 @@ test('usage accounting: a missing cost is unknown (null), not free, and missing 
 });
 
 test('usage accounting: a failed attempt is counted as a failure, not as a success', async () => {
-  const { report, mem } = await run({ env: LFM3_ONLY, handler: () => { throw new HttpError('HTTP 500: boom', 500); } });
+  const { report, mem } = await run({ env: SUMMARY_ONLY, handler: () => { throw new HttpError('HTTP 500: boom', 500); } });
   const u = report.lfm3.usage;
   assert.deepEqual([u.calls, u.successes, u.failures, u.httpRequests, u.consistent], [1, 0, 1, 1, true]);
   assert.equal(mem.aiUsage[0].usage.failures, 1);
@@ -499,7 +499,7 @@ test('only the allowed store operations are ever used, in every scenario (the gu
     { env: BOTH, handler: handler({ decisions: () => { throw new HttpError('HTTP 401: x', 401); }, chat: () => chat('nope') }) },
     { env: BOTH, handler: () => ({ model: 'x', answers: {} }) },
     { env: DECISIONS_ONLY, pending: 50 },
-    { env: LFM3_ONLY, pending: 0 },
+    { env: SUMMARY_ONLY, pending: 0 },
   ];
   for (const s of scenarios) {
     const { calls } = await run(s);
@@ -560,7 +560,7 @@ test('the smoke test is a pure function of the environment and the database: it 
   assert.equal(report.action, 'ai_smoke_test');
 });
 
-test('an unusable LFM3 answer is reported with its reason and token counts, not just "invalid_response"', async () => {
+test('an unusable summary answer is reported with its reason and token counts, not just "invalid_response"', async () => {
   const exhausted = () => ({
     id: 'gen-x', provider: 'Liquid', model: 'liquid/lfm-3-1.7b-20261106:free',
     choices: [{ index: 0, finish_reason: 'length', native_finish_reason: 'length', message: { role: 'assistant', content: null, reasoning: 'thinking about the statements '.repeat(40) } }],

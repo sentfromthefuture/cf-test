@@ -245,23 +245,32 @@ export async function summariseCluster(cfg: GeminiConfig, statements: string[]):
 }
 
 
-// ------------------------------------------------------------------------------------------------ Engine B: LFM3 via OpenRouter chat completions (optional summaries)
+// ------------------------------------------------------------------------------------------------ Engine B: summaries via OpenRouter chat completions (ERNIE 5.5 Flash Preview, optional)
 
 /**
  * Optional readable summaries only. Core analysis never depends on this: any failure here is contained by the caller.
  * Only an explicit ":free" model slug is accepted - there is no paid model and no paid fallback.
  */
-export const LFM3_DEFAULT_MODEL = 'liquid/lfm-3-1.7b:free';
+export const SUMMARY_DEFAULT_MODEL = 'baidu/ernie-5.5-flash-preview:free';
 /**
- * Completion budget for one summary request. LFM3 always reasons first (Liquid: it cannot be reliably switched off), and OpenRouter charges
- * reasoning tokens against max_tokens: a model that spends the whole budget thinking returns HTTP 200, finish_reason "length" and EMPTY content.
- * A prompt-compliant answer is only ~350-450 tokens, so nearly all of this is headroom for thinking.
- * The ceiling is time, not tokens: the collector's HTTP timeout is 30 s and the smoke test refuses to start with under 20 s left. At the
- * ~173 tok/s OpenRouter lists as the median for this endpoint, 3072 tokens take ~18 s (~26 s if the endpoint is 30% slower). Do not raise it
- * past ~4000 without raising those timeouts first. (Was 1600; unvalidated against production - see docs/ai-smoke-test.md.)
+ * Completion budget for one summary request (unchanged by the LFM3 -> ERNIE swap; see the risk below). ERNIE 5.5 Flash Preview always reasons
+ * first (public reports say reasoning cannot be switched off: enabled=false / effort=none are rejected with HTTP 400), and OpenRouter charges
+ * reasoning tokens against max_tokens: a model that spends the whole budget thinking returns HTTP 200, finish_reason "length" and EMPTY content
+ * (classified below as 'reasoning_exhausted_budget'). The published output ceiling is 921,600 tokens - the 1M figure is the CONTEXT window and
+ * says nothing about how much of a small max_tokens is left after thinking. A prompt-compliant answer is only ~350-450 tokens, so nearly all
+ * of this is headroom for thinking.
+ * The ceiling is time, not tokens: the collector's shared HTTP timeout is 30 s (runner.ts, ai-smoke.ts - one client for every engine, Decisions
+ * Fast included) and the smoke test refuses to start with under 20 s left. OpenRouter lists ~90 tok/s for this endpoint, so 3072 tokens take
+ * ~34 s in the worst case, i.e. a response that uses the whole budget can already hit the timeout; raising the budget cannot be done without
+ * first raising that shared timeout. UNVALIDATED against the live endpoint: if the production smoke test shows reasoning_exhausted_budget or
+ * timeouts, the budget and the timeout have to be revisited together (docs/ai-smoke-test.md).
  */
 export const SUMMARY_MAX_TOKENS = 3072;
-/** Part of the cache identity. Bump whenever SUMMARY_SYSTEM, the statement selection or the validation rules change. */
+/**
+ * Part of the cache identity. Bump whenever SUMMARY_SYSTEM, the statement selection or the validation rules change.
+ * NOT bumped for a model swap: the model slug is its own column of the cache identity (task, input_hash, model, config_version), so summaries
+ * cached for one model can never be served as another's.
+ */
 export const SUMMARY_CONFIG_VERSION = 'summary-v2';
 
 export interface OpenRouterConfig {
@@ -277,7 +286,7 @@ export function openRouterConfigFromEnv(env: Record<string, string | undefined>,
   const cacheVersion = (env.AI_CACHE_VERSION ?? '').trim().replace(/[^A-Za-z0-9._-]/g, '').slice(0, 24);
   return {
     apiKey: env.OPENROUTER_API_KEY!,
-    model: (env.OPENROUTER_MODEL || LFM3_DEFAULT_MODEL).trim(),
+    model: (env.OPENROUTER_MODEL || SUMMARY_DEFAULT_MODEL).trim(),
     configVersion: cacheVersion ? `${SUMMARY_CONFIG_VERSION}+${cacheVersion}` : SUMMARY_CONFIG_VERSION,
     http,
   };
@@ -287,13 +296,13 @@ export function openRouterConfigFromEnv(env: Record<string, string | undefined>,
 export function openRouterConfigProblem(env: Record<string, string | undefined>): string | null {
   if (env.OPENROUTER_ENABLED !== 'true') return null;
   if (!env.OPENROUTER_API_KEY) return 'OPENROUTER_ENABLED is true but OPENROUTER_API_KEY is not set';
-  const model = (env.OPENROUTER_MODEL || LFM3_DEFAULT_MODEL).trim();
+  const model = (env.OPENROUTER_MODEL || SUMMARY_DEFAULT_MODEL).trim();
   if (!isFreeModelSlug(model)) return `OPENROUTER_MODEL "${model.slice(0, 60)}" is not an explicit :free model; paid models are not allowed`;
   return null;
 }
 
 /**
- * Separates inline <think> reasoning from the answer. LFM3 wraps its chain of thought in <think>...</think>; OpenRouter normally moves that
+ * Separates inline <think> reasoning from the answer. Some reasoning models (LFM3 did) wrap their chain of thought in <think>...</think>; OpenRouter normally moves that
  * into message.reasoning, but if it is left in `content` the answer must still be taken only from what comes AFTER the reasoning:
  *  - closed pairs are dropped;
  *  - a closing tag with no opener (the opener was part of the prompt) makes everything before it reasoning;
@@ -385,7 +394,7 @@ export async function requestClusterSummary(cfg: OpenRouterConfig, statements: s
       {
         model: cfg.model,
         temperature: 0.1,
-        // LFM3 reasons before it answers, and OpenRouter charges reasoning tokens against max_tokens: leave room for both.
+        // The model reasons before it answers, and OpenRouter charges reasoning tokens against max_tokens: leave room for both.
         max_tokens: SUMMARY_MAX_TOKENS,
         response_format: { type: 'json_object' },
         provider: { allow_fallbacks: false },
@@ -408,7 +417,7 @@ export async function requestClusterSummary(cfg: OpenRouterConfig, statements: s
   let context: Partial<AiFailureDetail> = {};
   const fail = (message: string, kind: AiErrorKind, reason: AiFailureReason, extra: Partial<AiFailureDetail> = {}, status: number | null = null) => {
     const detail: AiFailureDetail = { ...base, ...context, ...extra, reason };
-    opts.log?.warn('LFM3 summary response unusable', { model: cfg.model, kind, ...detail });
+    opts.log?.warn('Summary response unusable', { model: cfg.model, kind, ...detail });
     return new AiCallError(message, kind, status, detail);
   };
 

@@ -26,14 +26,14 @@ export interface AnalysisStats {
   note?: string;
   /** Present only when the Decisions engine is configured. Counts live requests vs cache hits so repeated work is visible. */
   decisions?: { liveCalls: number; cacheHits: number; busy: number; cooldown: number; invalid: number; deferred: number; unstored: number; stopped: string | null };
-  /** Present only when the optional LFM3 summary engine is configured. A failure here never affects core analysis. */
+  /** Present only when the optional summary engine (OpenRouter chat completions) is configured. A failure here never affects core analysis. */
   summaryAi?: { liveCalls: number; cacheHits: number; failures: number; stopped: string | null };
 }
 
 export interface AnalysisDeps {
   store: Store;
   gemini: GeminiConfig | null;
-  /** Engine B (LFM3): optional cluster summaries only. */
+  /** Engine B (summaries): optional cluster summaries only. */
   openrouter?: OpenRouterConfig | null;
   maxOpenRouterSummaries?: number;
   /** Engine A (Decisions Fast): optional record classification. null/undefined = disabled (the default). */

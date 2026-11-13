@@ -1,4 +1,4 @@
-// The `ai_smoke_test` action: a bounded, admin-only diagnostic that proves BOTH optional AI engines (Decisions Fast, LFM3) work end to end
+// The `ai_smoke_test` action: a bounded, admin-only diagnostic that proves BOTH optional AI engines (Decisions Fast, the summary engine) work end to end
 // against a tiny sample of EXISTING pending records, before normal automated processing is enabled. See docs/ai-smoke-test.md.
 //
 // This is a diagnostic, not a collection run. What it deliberately does NOT do (each point is covered by ai-smoke.test.ts):
@@ -10,7 +10,7 @@
 //  - retry: it builds its own HTTP client with retries = 0 and the Decisions runner stops at the first service-level failure;
 //  - take any caller input: the entrypoint parses the request body only to route the action and passes nothing from it to this module
 //    (no limit, no model, no record ids).
-// Worst case it makes 3 Decisions requests + 1 LFM3 request, each a free model, each at most once.
+// Worst case it makes 3 Decisions requests + 1 summary request, each a free model, each at most once.
 //
 // What it DOES write, all through the existing production code paths: dr_ai_cache rows (the cache), dr_signal_ai rows (the model-output
 // table, at most 3, upserted by record_id), dr_ai_usage counters, and a short-lived 'ai_smoke_test' row in dr_job_locks.
@@ -35,8 +35,8 @@ export const AI_SMOKE_TEST_CANDIDATE_WINDOW = 12;
 
 const LOCK_NAME = 'ai_smoke_test';
 const LOCK_SECONDS = 180;
-/** The LFM3 request can take up to its 30s timeout; do not start it with less than this left. */
-const MIN_TIME_FOR_LFM3_MS = 20_000;
+/** The summary request can take up to its 30s timeout; do not start it with less than this left. */
+const MIN_TIME_FOR_SUMMARY_MS = 20_000;
 
 /** Everything this module may use from persistence. Narrower than Store: nothing that changes record status, sources or clusters. */
 export type AiSmokeStore = AiCacheStore & Pick<Store, 'acquireLock' | 'releaseLock' | 'claimPending' | 'aiNoteUsage' | 'saveSignalAi'>;
@@ -88,7 +88,7 @@ export interface EngineReport {
   stopped: string | null;
   /** Re-reads each answered input through the cache's own read path: `verified` = found, same entry, passes validation. */
   cache: { verified: number; unverified: number };
-  /** The model-output table. LFM3 has none here: see `basis`. */
+  /** The model-output table. The summary engine has none here: see `basis`. */
   output: { table: 'dr_signal_ai' | null; expected: number; written: number };
   usage: UsageReport;
   /** Why the status is not `passed`. Safe to show: contains no secrets and no record content. */
@@ -105,6 +105,7 @@ export interface AiSmokeTestReport {
   /** Counts and opaque ids only: no titles, excerpts or any other record content. */
   records: { candidatesRead: number; eligible: number; selected: number; ids: string[] };
   decisions: EngineReport;
+  /** The summary engine's report. The key keeps its original name (a stable wire contract with the admin panel); the engine itself is now ERNIE. */
   lfm3: EngineReport;
   elapsedMs: number;
   note?: string;
@@ -132,14 +133,14 @@ function decisionsReadiness(env: Env): Readiness {
   return problem ? { ready: false, status: 'misconfigured', issue: safeError(problem) } : { ready: true };
 }
 
-function lfm3Readiness(env: Env): Readiness {
+function summaryReadiness(env: Env): Readiness {
   if (env.OPENROUTER_ENABLED !== 'true') return { ready: false, status: 'disabled', issue: 'OPENROUTER_ENABLED is not "true"' };
   const problem = openRouterConfigProblem(env);
   return problem ? { ready: false, status: 'misconfigured', issue: safeError(problem) } : { ready: true };
 }
 
 const DECISIONS_BASIS = 'each selected record is classified individually';
-const LFM3_BASIS = 'one cluster summary over the selected records\' statements (a synthetic cluster: nothing is written to dr_clusters)';
+const SUMMARY_BASIS = 'one cluster summary over the selected records\' statements (a synthetic cluster: nothing is written to dr_clusters)';
 
 const zeroUsage = (): UsageReport => ({
   calls: 0, successes: 0, failures: 0, rateLimited: 0, httpRequests: 0, retries: 0, cacheHits: 0, cacheMisses: 0, inputTokens: 0, outputTokens: 0,
@@ -273,7 +274,7 @@ async function testDecisions(a: { cfg: DecisionsConfig; store: AiSmokeStore; rec
   return settle(rep, problems);
 }
 
-// ------------------------------------------------------------------------------------------------ Engine B: LFM3 summary
+// ------------------------------------------------------------------------------------------------ Engine B: summary
 
 /** Same rule production uses to state a problem from a post (decisionsToSignal): title first, else the text, at least 10 characters. */
 function statementOf(rec: PendingRecord): string | null {
@@ -281,12 +282,12 @@ function statementOf(rec: PendingRecord): string | null {
   return [cleanStatement(rec.title ?? ''), cleanStatement(text)].find((s) => s.length >= 10) ?? null;
 }
 
-async function testLfm3(a: { cfg: OpenRouterConfig; store: AiSmokeStore; records: PendingRecord[]; log: Logger; timeLeftMs: () => number; nowMs: () => number }): Promise<EngineReport> {
+async function testSummary(a: { cfg: OpenRouterConfig; store: AiSmokeStore; records: PendingRecord[]; log: Logger; timeLeftMs: () => number; nowMs: () => number }): Promise<EngineReport> {
   const { cfg } = a;
-  const rep = emptyEngine('not_run', LFM3_BASIS, undefined, cfg.model, cfg.configVersion);
+  const rep = emptyEngine('not_run', SUMMARY_BASIS, undefined, cfg.model, cfg.configVersion);
   const statements = summaryStatements(a.records.map(statementOf).filter((s): s is string => s !== null));
   if (statements.length === 0) return { ...rep, issue: 'the selected records have no usable problem statement' };
-  if (a.timeLeftMs() < MIN_TIME_FOR_LFM3_MS) return { ...rep, issue: 'not enough time left in this invocation to start a summary request' };
+  if (a.timeLeftMs() < MIN_TIME_FOR_SUMMARY_MS) return { ...rep, issue: 'not enough time left in this invocation to start a summary request' };
   rep.attempted = 1;
   const problems: string[] = [];
 
@@ -299,7 +300,7 @@ async function testLfm3(a: { cfg: OpenRouterConfig; store: AiSmokeStore; records
     rep.failed = 1;
     rep.stopped = classifyAiFailure(e).systemic ? failureLabel(e) : null;
     problems.push(`summary request failed: ${failureLabel(e)}`);
-    a.log.warn('AI smoke test: LFM3 summary failed', { error: safeError(e) });
+    a.log.warn('AI smoke test: summary failed', { error: safeError(e) });
   }
 
   let answered = false;
@@ -343,9 +344,9 @@ export async function runAiSmokeTest(o: AiSmokeTestOptions): Promise<AiSmokeTest
   const { store, env } = o;
 
   const dReady = decisionsReadiness(env);
-  const lReady = lfm3Readiness(env);
+  const lReady = summaryReadiness(env);
   let decisions = emptyEngine(dReady.ready ? 'not_run' : dReady.status, DECISIONS_BASIS, dReady.ready ? undefined : dReady.issue);
-  let lfm3 = emptyEngine(lReady.ready ? 'not_run' : lReady.status, LFM3_BASIS, lReady.ready ? undefined : lReady.issue);
+  let lfm3 = emptyEngine(lReady.ready ? 'not_run' : lReady.status, SUMMARY_BASIS, lReady.ready ? undefined : lReady.issue);
   const records: AiSmokeTestReport['records'] = { candidatesRead: 0, eligible: 0, selected: 0, ids: [] };
   let note: string | undefined;
 
@@ -398,7 +399,7 @@ export async function runAiSmokeTest(o: AiSmokeTestOptions): Promise<AiSmokeTest
     const dCfg = dReady.ready ? decisionsConfigFromEnv(env, http) : null;
     if (dCfg) decisions = await testDecisions({ cfg: dCfg, store, records: selected, log, timeLeftMs, nowMs });
     const lCfg = lReady.ready ? openRouterConfigFromEnv(env, http) : null;
-    if (lCfg) lfm3 = await testLfm3({ cfg: lCfg, store, records: selected, log, timeLeftMs, nowMs });
+    if (lCfg) lfm3 = await testSummary({ cfg: lCfg, store, records: selected, log, timeLeftMs, nowMs });
     return finish();
   } finally {
     await store.releaseLock(LOCK_NAME).catch(() => undefined);
