@@ -45,8 +45,8 @@ function recordingStore(respond: (name: string) => unknown) {
     assert.equal(init.method, 'POST');
     assert.equal(new Headers(init.headers).get('content-type'), 'application/json');
     assert.ok(init.body, `${name}: RPC request body must not be empty`);
-    assert.ok(init.body instanceof Uint8Array, `${name}: RPC request body must be explicit UTF-8 bytes`);
-    const bodyText = await new Response(init.body).text();
+    assert.equal(typeof init.body, 'string', `${name}: RPC request body is the JSON text`);
+    const bodyText = init.body as string;
     assert.ok(bodyText.length > 0, `${name}: serialized JSON must not be empty`);
     calls.push({ name, args: JSON.parse(bodyText) });
     return new Response(JSON.stringify(respond(name)), { status: 200 });

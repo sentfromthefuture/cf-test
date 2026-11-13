@@ -61,6 +61,24 @@ export interface Store extends AiCacheStore {
   saveSignalAi(rows: SignalAiRow[]): Promise<number>;
 }
 
+/**
+ * JSON.stringify for a PostgREST request body.
+ *
+ * A UTF-16 string can hold a LONE surrogate, e.g. an emoji cut in half by `.slice(0, n)`. JSON.stringify writes it as the escape `\ud83d`,
+ * which is valid ECMAScript JSON but is rejected by PostgREST's parser: the whole request fails with HTTP 400 PGRST102 "Empty or invalid
+ * json" (reproduced against PostgREST 12.2.12, 13.0.7 and 16.5; it makes no difference whether the body is a string or a Uint8Array).
+ * Any model- or web-supplied text that is truncated before it is stored can trigger it, e.g. Decisions citation titles and snippets.
+ *
+ * Lone surrogates are replaced with U+FFFD, exactly what a UTF-8 encoder does. Every other payload is returned unchanged, byte for byte.
+ * The scan walks the serialized text escape by escape so that an escaped backslash followed by the text "ud83d" is never mistaken for one.
+ */
+const SURROGATE_ESCAPES = /\\u(d[89ab][0-9a-f]{2})\\u(d[c-f][0-9a-f]{2})|\\u(d[89a-f][0-9a-f]{2})|\\[^u]/gi;
+export function toPostgrestJson(args: unknown): string {
+  const json = JSON.stringify(args);
+  if (!/\\ud[89a-f]/i.test(json)) return json;
+  return json.replace(SURROGATE_ESCAPES, (m, _hi, _lo, lone) => (lone === undefined ? m : '\\ufffd'));
+}
+
 /** PostgREST RPC client using the service-role key (server-side only; never shipped to the browser). */
 export class SupabaseStore implements Store {
   constructor(private url: string, private serviceKey: string, private fetchImpl: typeof fetch = fetch) {}
@@ -72,17 +90,11 @@ export class SupabaseStore implements Store {
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), 25_000);
         let res: Response;
-        // Serialize once and send explicit UTF-8 bytes so PostgREST receives a non-empty JSON payload.
-        const jsonBody = JSON.stringify(args);
-        if (typeof jsonBody !== 'string' || jsonBody.length === 0) {
-          throw new Error(`rpc ${name} request body serialization produced empty JSON`);
-        }
-        const requestBody = new TextEncoder().encode(jsonBody);
         try {
           res = await this.fetchImpl(`${this.url.replace(/\/$/, '')}/rest/v1/rpc/${name}`, {
             method: 'POST',
             headers: { apikey: this.serviceKey, authorization: `Bearer ${this.serviceKey}`, 'content-type': 'application/json' },
-            body: requestBody,
+            body: toPostgrestJson(args),
             signal: ctl.signal,
           });
         } finally {
