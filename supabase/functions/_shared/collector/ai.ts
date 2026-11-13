@@ -262,7 +262,7 @@ export const LFM3_DEFAULT_MODEL = 'liquid/lfm-3-1.7b:free';
  */
 export const SUMMARY_MAX_TOKENS = 3072;
 /** Part of the cache identity. Bump whenever SUMMARY_SYSTEM, the statement selection or the validation rules change. */
-export const SUMMARY_CONFIG_VERSION = 'summary-v1';
+export const SUMMARY_CONFIG_VERSION = 'summary-v2';
 
 export interface OpenRouterConfig {
   apiKey: string;
