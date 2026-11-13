@@ -72,11 +72,17 @@ export class SupabaseStore implements Store {
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), 25_000);
         let res: Response;
+        // Serialize once and send explicit UTF-8 bytes so PostgREST receives a non-empty JSON payload.
+        const jsonBody = JSON.stringify(args);
+        if (typeof jsonBody !== 'string' || jsonBody.length === 0) {
+          throw new Error(`rpc ${name} request body serialization produced empty JSON`);
+        }
+        const requestBody = new TextEncoder().encode(jsonBody);
         try {
           res = await this.fetchImpl(`${this.url.replace(/\/$/, '')}/rest/v1/rpc/${name}`, {
             method: 'POST',
             headers: { apikey: this.serviceKey, authorization: `Bearer ${this.serviceKey}`, 'content-type': 'application/json' },
-            body: JSON.stringify(args),
+            body: requestBody,
             signal: ctl.signal,
           });
         } finally {
