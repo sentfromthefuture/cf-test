@@ -4,7 +4,7 @@
 // no request is ever made. They prove parsing, classification, diagnostics and accounting, not model quality or live availability.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeChatCompletion, extractJsonObject, LFM3_DEFAULT_MODEL, OpenRouterConfig, requestClusterSummary, splitInlineReasoning, SUMMARY_MAX_TOKENS, summaryValidationProblem, validateSummary } from '../ai.ts';
+import { describeChatCompletion, extractJsonObject, LFM3_DEFAULT_MODEL, OpenRouterConfig, openRouterConfigFromEnv, requestClusterSummary, splitInlineReasoning, SUMMARY_CONFIG_VERSION, SUMMARY_MAX_TOKENS, summaryValidationProblem, validateSummary } from '../ai.ts';
 import { AiCallError, AiFailureReason, describeAiFailure, emptyAiUsage, meteredCall } from '../ai-common.ts';
 import { summariseClusterCached } from '../summaries.ts';
 import { HttpError, Logger } from '../types.ts';
@@ -28,7 +28,14 @@ const orBody = (message: Record<string, unknown>, o: { finish?: unknown; native?
 });
 
 const cfgFor = (http: ReturnType<typeof scriptedHttp>['http'], over: Partial<OpenRouterConfig> = {}): OpenRouterConfig =>
-  ({ apiKey: KEY, model: LFM3_DEFAULT_MODEL, configVersion: 'summary-v1', http, ...over });
+  ({ apiKey: KEY, model: LFM3_DEFAULT_MODEL, configVersion: SUMMARY_CONFIG_VERSION, http, ...over });
+
+test('LFM3 cache identity uses the current summary configuration version', () => {
+  const cfg = openRouterConfigFromEnv({ OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: KEY }, scriptedHttp(() => ({})).http);
+  assert.ok(cfg);
+  assert.equal(SUMMARY_CONFIG_VERSION, 'summary-v2');
+  assert.equal(cfg.configVersion, 'summary-v2');
+});
 const callWith = (body: unknown, log?: Logger) => requestClusterSummary(cfgFor(scriptedHttp(() => body).http), STATEMENTS, { log });
 const errOf = (p: Promise<unknown>) => p.then(() => { throw new Error('expected a failure but the call succeeded'); }, (e) => e as AiCallError);
 function capture() {
