@@ -51,6 +51,8 @@ export interface AiFailureDetail {
   maxTokens?: number;
   servedModel?: string;
   provider?: string;
+  /** Shape of any reasoning found inline in `content` as <think> tags (never its text): 'closing_only' = no opening tag, 'unclosed' = never finished. */
+  inlineReasoning?: 'closed' | 'closing_only' | 'unclosed';
   /** First summary field that failed validation (a fixed name from our own schema). */
   field?: string;
 }

@@ -252,8 +252,15 @@ export async function summariseCluster(cfg: GeminiConfig, statements: string[]):
  * Only an explicit ":free" model slug is accepted - there is no paid model and no paid fallback.
  */
 export const LFM3_DEFAULT_MODEL = 'liquid/lfm-3-1.7b:free';
-/** Completion budget for one summary request. Reasoning tokens are spent from this too, so it must leave room to think AND to finish the JSON. */
-export const SUMMARY_MAX_TOKENS = 1600;
+/**
+ * Completion budget for one summary request. LFM3 always reasons first (Liquid: it cannot be reliably switched off), and OpenRouter charges
+ * reasoning tokens against max_tokens: a model that spends the whole budget thinking returns HTTP 200, finish_reason "length" and EMPTY content.
+ * A prompt-compliant answer is only ~350-450 tokens, so nearly all of this is headroom for thinking.
+ * The ceiling is time, not tokens: the collector's HTTP timeout is 30 s and the smoke test refuses to start with under 20 s left. At the
+ * ~173 tok/s OpenRouter lists as the median for this endpoint, 3072 tokens take ~18 s (~26 s if the endpoint is 30% slower). Do not raise it
+ * past ~4000 without raising those timeouts first. (Was 1600; unvalidated against production - see docs/ai-smoke-test.md.)
+ */
+export const SUMMARY_MAX_TOKENS = 3072;
 /** Part of the cache identity. Bump whenever SUMMARY_SYSTEM, the statement selection or the validation rules change. */
 export const SUMMARY_CONFIG_VERSION = 'summary-v1';
 
@@ -285,9 +292,32 @@ export function openRouterConfigProblem(env: Record<string, string | undefined>)
   return null;
 }
 
-/** Reasoning models may wrap the JSON in <think> blocks, code fences or a sentence. Returns the first JSON object found, or null. */
+/**
+ * Separates inline <think> reasoning from the answer. LFM3 wraps its chain of thought in <think>...</think>; OpenRouter normally moves that
+ * into message.reasoning, but if it is left in `content` the answer must still be taken only from what comes AFTER the reasoning:
+ *  - closed pairs are dropped;
+ *  - a closing tag with no opener (the opener was part of the prompt) makes everything before it reasoning;
+ *  - an opener that never closes means the model ran out before it finished thinking: there is NO answer, and nothing quoted inside that
+ *    unfinished reasoning (a drafted JSON object, say) may be mistaken for one.
+ */
+export function splitInlineReasoning(text: string): { answer: string; inline: 'none' | 'closed' | 'closing_only' | 'unclosed' } {
+  let answer = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  let inline: 'none' | 'closed' | 'closing_only' | 'unclosed' = answer.length !== text.length ? 'closed' : 'none';
+  const closers = [...answer.matchAll(/<\/think>/gi)];
+  if (closers.length) {
+    const last = closers[closers.length - 1];
+    answer = answer.slice((last.index ?? 0) + last[0].length);
+    inline = 'closing_only';
+  }
+  if (/<think>/i.test(answer)) inline = 'unclosed';
+  return { answer, inline };
+}
+
+/** Reasoning models may wrap the JSON in <think> blocks, code fences or a sentence. Returns the outermost JSON object in the answer part, or null (always null for unfinished reasoning). */
 export function extractJsonObject(text: string): unknown {
-  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '').trim();
+  const { answer, inline } = splitInlineReasoning(text);
+  if (inline === 'unclosed') return null;
+  const cleaned = answer.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '').trim();
   try {
     return JSON.parse(cleaned);
   } catch { /* fall through to the brace scan */ }
@@ -375,8 +405,9 @@ export async function requestClusterSummary(cfg: OpenRouterConfig, statements: s
   if (data?.error) throw aiErrorFromBody(data.error); // upstream failure reported inside a 200 body
 
   const base = describeChatCompletion(data, SUMMARY_MAX_TOKENS, httpStatus);
+  let context: Partial<AiFailureDetail> = {};
   const fail = (message: string, kind: AiErrorKind, reason: AiFailureReason, extra: Partial<AiFailureDetail> = {}, status: number | null = null) => {
-    const detail: AiFailureDetail = { ...base, ...extra, reason };
+    const detail: AiFailureDetail = { ...base, ...context, ...extra, reason };
     opts.log?.warn('LFM3 summary response unusable', { model: cfg.model, kind, ...detail });
     return new AiCallError(message, kind, status, detail);
   };
@@ -399,6 +430,13 @@ export async function requestClusterSummary(cfg: OpenRouterConfig, statements: s
     // finish_reason=length with nothing written is OpenRouter's documented signature of a reasoning model that spent all of max_tokens thinking.
     if (finish === 'length') throw fail('summary was cut off before any answer (finish_reason=length)', 'invalid_response', 'reasoning_exhausted_budget');
     throw fail('OpenRouter returned no content', 'invalid_response', 'empty_content');
+  }
+  const { inline } = splitInlineReasoning(rawText);
+  if (inline !== 'none') context = { inlineReasoning: inline };
+  if (inline === 'unclosed') {
+    // The reasoning never finished, so there is no answer: whatever JSON appears inside it is a draft, not the model's result.
+    if (finish === 'length') throw fail('reasoning was cut off before any answer (finish_reason=length)', 'invalid_response', 'reasoning_exhausted_budget');
+    throw fail('the reasoning block never closed', 'invalid_response', 'no_json');
   }
   const raw = extractJsonObject(rawText);
   if (raw === null) {

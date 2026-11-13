@@ -4,7 +4,7 @@
 // no request is ever made. They prove parsing, classification, diagnostics and accounting, not model quality or live availability.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeChatCompletion, LFM3_DEFAULT_MODEL, OpenRouterConfig, requestClusterSummary, SUMMARY_MAX_TOKENS, summaryValidationProblem, validateSummary } from '../ai.ts';
+import { describeChatCompletion, extractJsonObject, LFM3_DEFAULT_MODEL, OpenRouterConfig, requestClusterSummary, splitInlineReasoning, SUMMARY_MAX_TOKENS, summaryValidationProblem, validateSummary } from '../ai.ts';
 import { AiCallError, AiFailureReason, describeAiFailure, emptyAiUsage, meteredCall } from '../ai-common.ts';
 import { summariseClusterCached } from '../summaries.ts';
 import { HttpError, Logger } from '../types.ts';
@@ -226,12 +226,12 @@ test('a successful summary is persisted with its usage, and the next ask is a ca
 test('a response that arrived but was unusable still has its tokens counted, and nothing is stored as a result', async () => {
   const store = new MemoryStore();
   const usage = emptyAiUsage();
-  const body = orBody({ content: null, reasoning: 'x'.repeat(100) }, { finish: 'length', usage: { prompt_tokens: 300, completion_tokens: 1600, total_tokens: 1900, cost: 0 } });
+  const body = orBody({ content: null, reasoning: 'x'.repeat(100) }, { finish: 'length', usage: { prompt_tokens: 300, completion_tokens: SUMMARY_MAX_TOKENS, total_tokens: 300 + SUMMARY_MAX_TOKENS, cost: 0 } });
   const e = await errOf(summariseClusterCached(cfgFor(scriptedHttp(() => body).http), store, STATEMENTS, { usage }));
   assert.equal(e.detail?.reason, 'reasoning_exhausted_budget');
   assert.deepEqual(
     { calls: usage.calls, ok: usage.successes, failed: usage.failures, misses: usage.cache_misses, inTok: usage.input_tokens, outTok: usage.output_tokens, costCalls: usage.cost_reported_calls },
-    { calls: 1, ok: 0, failed: 1, misses: 1, inTok: 300, outTok: 1600, costCalls: 0 },
+    { calls: 1, ok: 0, failed: 1, misses: 1, inTok: 300, outTok: SUMMARY_MAX_TOKENS, costCalls: 0 },
   );
   const entry = [...store.aiCache.values()][0];
   assert.deepEqual({ status: entry.status, result: entry.result }, { status: 'failed', result: null });
@@ -250,15 +250,86 @@ test('failed-call accounting adds only what the response reported', async () => 
   assert.deepEqual({ calls: plain.calls, failed: plain.failures, inTok: plain.input_tokens, outTok: plain.output_tokens }, { calls: 3, failed: 3, inTok: 0, outTok: 0 });
 });
 
-test('the request itself is unchanged: free configured slug, standard endpoint, no fallback, same budget', async () => {
+test('the request is unchanged except for its completion budget: free configured slug, standard endpoint, no fallback, no new parameters', async () => {
   const net = scriptedHttp(() => orBody({ content: JSON.stringify(good) }));
   await requestClusterSummary(cfgFor(net.http), STATEMENTS);
   const c = net.calls[0];
   assert.equal(c.url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal(c.body.model, 'liquid/lfm-3-1.7b:free');
-  assert.equal(c.body.max_tokens, 1600);
-  assert.equal(SUMMARY_MAX_TOKENS, 1600);
+  assert.equal(c.body.max_tokens, 3072);
+  assert.equal(SUMMARY_MAX_TOKENS, 3072, 'changing the budget is deliberate: see the timeout-ceiling test below');
+  assert.deepEqual(Object.keys(c.body).sort(), ['max_tokens', 'messages', 'model', 'provider', 'response_format', 'temperature'], 'no unverified request parameters (reasoning, top_k, repetition_penalty...) were added');
+  assert.equal(c.body.temperature, 0.1);
   assert.deepEqual(c.body.response_format, { type: 'json_object' });
   assert.equal(c.body.provider.allow_fallbacks, false);
   assert.equal(c.body.messages.length, 2);
+});
+
+test('the completion budget stays inside the time ceiling (30 s client timeout, 20 s smoke-test start guard)', () => {
+  // OpenRouter lists ~173 tok/s as this endpoint's median throughput and ~0.44 s to first token (checked 2026-11-13). If you raise the budget,
+  // raise the HTTP timeout (runner.ts, ai-smoke.ts) and MIN_TIME_FOR_LFM3_MS first, or a slow endpoint turns "too little room" into a timeout.
+  const worstCaseSeconds = (tokensPerSecond: number) => SUMMARY_MAX_TOKENS / tokensPerSecond + 0.44;
+  assert.ok(worstCaseSeconds(173) <= 20, `median-speed worst case is ${worstCaseSeconds(173).toFixed(1)} s, over the 20 s smoke-test guard`);
+  assert.ok(worstCaseSeconds(173 * 0.7) <= 28, `30%-slower worst case is ${worstCaseSeconds(173 * 0.7).toFixed(1)} s, too close to the 30 s timeout`);
+  assert.ok(SUMMARY_MAX_TOKENS >= 2048, 'Liquid\'s own example allows 2048 new tokens for a trivial prompt; this one asks for a reasoned 10-field answer');
+});
+
+// ------------------------------------------------------------------ reasoning left inline in `content`
+// Liquid documents that LFM3 wraps its chain of thought in <think>...</think>. OpenRouter normally moves it to message.reasoning, but if the
+// endpoint leaves it in `content`, an answer must only ever come from AFTER the reasoning.
+const draft = JSON.stringify({ ...good, title: 'DRAFT-QUOTED-IN-THINKING' });
+const real = JSON.stringify({ ...good, title: 'REAL ANSWER' });
+
+test('splitInlineReasoning: answer is only what follows the reasoning', () => {
+  const t: Array<[string, string, string, string]> = [
+    ['no tags', 'plain', 'plain', 'none'],
+    ['closed pair', '<think>a {x}</think>{"k":1}', '{"k":1}', 'closed'],
+    ['upper-case tags', '<THINK>a</THINK>{"k":1}', '{"k":1}', 'closed'],
+    ['several pairs', '<think>a</think>X<think>b</think>Y', 'XY', 'closed'],
+    ['closing tag only (opener was in the prompt)', 'long {"k":0} reasoning</think>\n{"k":1}', '\n{"k":1}', 'closing_only'],
+    ['pair then stray closer', '<think>a</think>b</think>{"k":1}', '{"k":1}', 'closing_only'],
+    ['opener never closes', 'x<think>still thinking {"k":0}', 'x<think>still thinking {"k":0}', 'unclosed'],
+    ['closed pair then unfinished one', '<think>a</think>{"k":1}<think>more', '{"k":1}<think>more', 'unclosed'],
+  ];
+  for (const [name, input, answer, inline] of t) assert.deepEqual(splitInlineReasoning(input), { answer, inline }, name);
+});
+
+test('unfinished inline reasoning is never turned into an answer, even when it quotes a valid-looking draft', async () => {
+  const unfinished = `<think>Let me draft the answer: ${draft} Now I will refine the wording and re-check every statement, `;
+  const e = await errOf(callWith(orBody({ content: unfinished }, { finish: 'length' })));
+  assert.deepEqual({ kind: e.kind, reason: e.detail?.reason, inline: e.detail?.inlineReasoning }, { kind: 'invalid_response', reason: 'reasoning_exhausted_budget', inline: 'unclosed' });
+  assert.equal(extractJsonObject(unfinished), null);
+  // the same text without a length stop is still not an answer
+  const stopped = await errOf(callWith(orBody({ content: unfinished }, { finish: 'stop' })));
+  assert.deepEqual({ reason: stopped.detail?.reason, inline: stopped.detail?.inlineReasoning }, { reason: 'no_json', inline: 'unclosed' });
+  // nothing is stored for it
+  const store = new MemoryStore();
+  await errOf(summariseClusterCached(cfgFor(scriptedHttp(() => orBody({ content: unfinished }, { finish: 'length' })).http), store, STATEMENTS, { usage: emptyAiUsage() }));
+  assert.deepEqual([...store.aiCache.values()].map((x) => [x.status, x.result]), [['failed', null]]);
+});
+
+test('a closing tag with no opener: the answer after it is used, the draft before it is not', async () => {
+  const s = await callWith(orBody({ content: `Thinking... a draft would be ${draft} but let me check the evidence again.</think>\n${real}` }));
+  assert.equal(s.title, 'REAL ANSWER');
+  // answer cut off after the closer: the draft before it must not be picked up instead
+  const cut = await errOf(callWith(orBody({ content: `thinking ${draft}</think>\n{"title":"REAL","problem_desc` }, { finish: 'length' })));
+  assert.deepEqual({ reason: cut.detail?.reason, inline: cut.detail?.inlineReasoning }, { reason: 'truncated_json', inline: 'closing_only' });
+  // an answer that still fails the strict schema is still rejected
+  const bad = await errOf(callWith(orBody({ content: `thinking</think>${JSON.stringify({ ...good, development_feasibility: '4' })}` })));
+  assert.deepEqual({ reason: bad.detail?.reason, field: bad.detail?.field }, { reason: 'schema_invalid', field: 'development_feasibility' });
+});
+
+test('closed reasoning around a real answer still parses, and the diagnostics record only its shape', async () => {
+  assert.equal((await callWith(orBody({ content: `<think>quoted ${draft} while thinking</think>\n${real}` }))).title, 'REAL ANSWER');
+  assert.equal((await callWith(orBody({ content: `<THINK>x</THINK>${real}` }))).title, 'REAL ANSWER');
+
+  const { entries, log } = capture();
+  const text = 'CANARY-INLINE-REASONING-TEXT </think>not json';
+  const e = await errOf(requestClusterSummary(cfgFor(scriptedHttp(() => orBody({ content: text })).http), STATEMENTS, { log }));
+  assert.equal(e.detail?.inlineReasoning, 'closing_only');
+  assert.equal(entries[0].extra!.inlineReasoning, 'closing_only');
+  assert.ok(![e.message, JSON.stringify(e.detail), JSON.stringify(entries)].join('\n').includes('CANARY-INLINE-REASONING-TEXT'));
+  // no inline reasoning: the field is absent, not 'none'
+  const plain = await errOf(callWith(orBody({ content: 'no json here' })));
+  assert.equal('inlineReasoning' in (plain.detail as object), false);
 });

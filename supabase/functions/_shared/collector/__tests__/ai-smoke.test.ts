@@ -3,7 +3,7 @@
 // They prove orchestration, safety limits, persistence checks and usage accounting - not model quality or live availability.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PendingRecord, worthAnalysing } from '../ai.ts';
+import { PendingRecord, SUMMARY_MAX_TOKENS, worthAnalysing } from '../ai.ts';
 import { AI_SMOKE_TEST_CANDIDATE_WINDOW, AI_SMOKE_TEST_MAX_RECORDS, AiSmokeStore, AiSmokeTestReport, runAiSmokeTest } from '../ai-smoke.ts';
 import { Env, HttpError, RawRecordInput } from '../types.ts';
 import { MemoryStore, rec, silentLog } from './helpers.ts';
@@ -564,17 +564,17 @@ test('an unusable LFM3 answer is reported with its reason and token counts, not 
   const exhausted = () => ({
     id: 'gen-x', provider: 'Liquid', model: 'liquid/lfm-3-1.7b-20261106:free',
     choices: [{ index: 0, finish_reason: 'length', native_finish_reason: 'length', message: { role: 'assistant', content: null, reasoning: 'thinking about the statements '.repeat(40) } }],
-    usage: { prompt_tokens: 300, completion_tokens: 1600, total_tokens: 1900, cost: 0 },
+    usage: { prompt_tokens: 300, completion_tokens: SUMMARY_MAX_TOKENS, total_tokens: 300 + SUMMARY_MAX_TOKENS, cost: 0 },
   });
   const a = await run({ env: BOTH, handler: handler({ chat: exhausted }) });
   assert.deepEqual(statuses(a.report), ['passed', 'failed']);
   const issue = a.report.lfm3.issue!;
-  assert.match(issue, /^summary request failed: invalid_response \[reasoning_exhausted_budget, finish_reason=length, completion_tokens=1600\/1600\]/);
+  assert.equal(issue, `summary request failed: invalid_response [reasoning_exhausted_budget, finish_reason=length, completion_tokens=${SUMMARY_MAX_TOKENS}/${SUMMARY_MAX_TOKENS}]`);
   assert.ok(issue.length < 200, 'short enough to be shown whole in the admin panel');
   assert.ok(!issue.includes('thinking about'), 'model text is never part of the report');
   assert.equal(a.report.lfm3.stopped, null, 'an unusable answer is about the input, not a reason to stop the engine');
   assert.deepEqual({ live: a.report.lfm3.liveCalls, failed: a.report.lfm3.failed, calls: a.report.lfm3.usage.calls, failures: a.report.lfm3.usage.failures, consistent: a.report.lfm3.usage.consistent }, { live: 1, failed: 1, calls: 1, failures: 1, consistent: true });
-  assert.deepEqual({ inTok: a.report.lfm3.usage.inputTokens, outTok: a.report.lfm3.usage.outputTokens, recorded: a.report.lfm3.usage.recorded }, { inTok: 300, outTok: 1600, recorded: 'ok' }, 'the tokens the provider spent are accounted for');
+  assert.deepEqual({ inTok: a.report.lfm3.usage.inputTokens, outTok: a.report.lfm3.usage.outputTokens, recorded: a.report.lfm3.usage.recorded }, { inTok: 300, outTok: SUMMARY_MAX_TOKENS, recorded: 'ok' }, 'the tokens the provider spent are accounted for');
   const entries = cacheEntries(a.mem, 'summary');
   assert.deepEqual({ n: entries.length, status: entries[0].status, result: entries[0].result }, { n: 1, status: 'failed', result: null });
   assert.equal(a.report.decisions.output.written, 3, 'Decisions Fast is unaffected');
