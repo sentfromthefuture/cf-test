@@ -32,13 +32,13 @@ test('LFM3 is optional, off by default, free-only, and the old paid default is g
   const c = openRouterConfigFromEnv({ OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: 'k' }, http)!;
   assert.equal(c.model, 'liquid/lfm-3-1.7b:free');
   assert.notEqual(c.model, 'openai/gpt-4o-mini', 'the previous paid default must not come back');
-  assert.equal(c.configVersion, 'summary-v1');
+  assert.equal(c.configVersion, 'summary-v2');
   for (const paid of ['openai/gpt-4o-mini', 'liquid/lfm-3-1.7b', 'liquid/lfm-3-1.7b:nitro', 'anthropic/claude-3.5-sonnet']) {
     assert.equal(openRouterConfigFromEnv({ OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: 'k', OPENROUTER_MODEL: paid }, http), null, paid);
     assert.match(openRouterConfigProblem({ OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: 'k', OPENROUTER_MODEL: paid })!, /not an explicit :free model/);
   }
   assert.equal(openRouterConfigProblem({}), null);
-  assert.equal(openRouterConfigFromEnv({ OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: 'k', AI_CACHE_VERSION: 'r2' }, http)!.configVersion, 'summary-v1+r2');
+  assert.equal(openRouterConfigFromEnv({ OPENROUTER_ENABLED: 'true', OPENROUTER_API_KEY: 'k', AI_CACHE_VERSION: 'r2' }, http)!.configVersion, 'summary-v2+r2');
 });
 
 // ------------------------------------------------------------------ request

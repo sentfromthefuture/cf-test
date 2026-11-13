@@ -165,12 +165,38 @@ Only after this passes, decide separately (and explicitly) whether to enable nor
 | `auth (HTTP 401/403)` | key rejected | check the key in OpenRouter |
 | `rate_limited (HTTP 429)` | free-tier limit | wait and re-run; nothing was retried |
 | `not_found (HTTP 404)` | endpoint or model slug not available | check the model slug; the Decisions API is documented as **alpha** |
-| `unusable response` / `invalid_response` | the model answered but the answer failed strict validation | possible contract drift; do not enable that engine until understood |
+| `invalid_response [<reason>, ...]` | a response arrived but could not be used. The bracket says which of several different failures it was (see the next table). It never contains model text, record text or a key | act on the reason, not on the label; do not enable that engine until understood |
+| `<kind> [provider_error, finish_reason=error]` | OpenRouter reported an error on the choice, or ended the generation with `finish_reason=error` | a service problem, not a bad answer: nothing is cached against the input, so re-run later |
 | `cooling down` | that exact input failed recently; no request was made | wait out the cooldown (1 h, 2 h, 4 h ...) |
 | `busy` | another worker holds the cache entry | re-run shortly |
 | `cache entries could not be verified` / `dr_signal_ai ...` | the answer was not durable where expected | the AI cache migration may not be applied; check `dr_ai_cache` exists |
 | `usage could not be recorded` | `dr_ai_note_usage` failed | check the AI cache migration is applied |
 | `no eligible pending records` | none of the 12 oldest pending rows passed the gate | normal if they are all non-problems |
+
+### Reading `invalid_response [reason, ...]`
+
+An engine can answer and still produce nothing usable. Since these failures all share the kind `invalid_response`, the report adds a reason and
+the numbers that explain it (`finish_reason`, `completion_tokens=<used>/<budget>`, or the first failing `field`). The same facts are logged once
+per unusable response as `LFM3 summary response unusable` (Supabase function logs), with response *shapes and counts only*.
+
+| reason | what happened | usual next step |
+|---|---|---|
+| `response_not_json` | HTTP 200, but the body was not JSON | transient provider/proxy problem; re-run |
+| `no_choices` | JSON, but no `choices[0]` | transient or contract drift; re-run, then compare with OpenRouter's response schema |
+| `empty_content` | a choice with empty or null content although generation ended normally (`finish_reason=stop`) | OpenRouter documents cold starts and scale-up as a cause; retry later. If it repeats, look at `completion_tokens` and `reasoningTokens` in the log line |
+| `reasoning_exhausted_budget` | no answer because the reasoning model spent all of `max_tokens` thinking: empty content with `finish_reason=length` (`completion_tokens` equals the budget), or reasoning left inline in `content` that never closed. OpenRouter says retrying does not help | the budget is `SUMMARY_MAX_TOKENS` (3,072). If this persists, do not just raise it: it is bounded by the 30 s HTTP timeout and the 20 s start guard (about 18 s at the ~173 tok/s median), so raise those first. The log line's `reasoningTokens` shows how much thinking the model needed |
+| `truncated_json` | content present but cut off by `finish_reason=length` | same as above |
+| `no_json` | content present but contains no JSON object | model ignored the format; consider a stricter prompt or a `json_schema` response format |
+| `not_an_object` | the JSON was an array or a primitive | same as above |
+| `schema_invalid` + `field=<name>` | a JSON object that fails the summary rules; `field` is the first failing one (e.g. `development_feasibility` must be an integer 1 to 5) | decide deliberately whether the rule or the prompt is wrong; the validation is not relaxed automatically |
+| `provider_error` / `content_filtered` | `finish_reason=error` or an error object on the choice / `finish_reason=content_filter` | service problem / withheld answer; see the table above |
+
+The log line also records `inlineReasoning` (`closed`, `closing_only`, `unclosed`) when the model's `<think>` reasoning was left inside `content`
+instead of OpenRouter's `reasoning` field; only the shape is recorded, never the text. The answer is taken only from what follows the reasoning,
+and reasoning that never finished is never read as an answer.
+
+After an `invalid_response` the exact same input is not re-sent for the cooldown (1 h for the first failure, then growing), so re-running the
+test straight away with the same records reports `cooling down` and makes no request. Service-level failures leave no cooldown.
 
 ## Rollback
 

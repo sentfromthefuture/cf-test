@@ -15,7 +15,7 @@
 // What it DOES write, all through the existing production code paths: dr_ai_cache rows (the cache), dr_signal_ai rows (the model-output
 // table, at most 3, upserted by record_id), dr_ai_usage counters, and a short-lived 'ai_smoke_test' row in dr_job_locks.
 import { ClusterSummary, OpenRouterConfig, openRouterConfigFromEnv, openRouterConfigProblem, PendingRecord, validateSummary, worthAnalysing } from './ai.ts';
-import { AiCacheKey, AiCacheStore, AiTask, AiUsageCounters, CachedOutcome, CacheBegin, classifyAiFailure, emptyAiUsage, hasAiUsage } from './ai-common.ts';
+import { AiCacheKey, AiCacheStore, AiTask, AiUsageCounters, CachedOutcome, CacheBegin, classifyAiFailure, describeAiFailure, emptyAiUsage, hasAiUsage } from './ai-common.ts';
 import { DecisionsConfig, decisionsConfigFromEnv, decisionsConfigProblem, reviveDecisionsResult, SignalAiRow } from './decisions.ts';
 import { classifyWithDecisions, DecisionsBatchResult, newDecisionsRunState } from './decisions-runner.ts';
 import { cleanStatement } from './heuristics.ts';
@@ -153,10 +153,12 @@ const emptyEngine = (status: EngineStatus, basis: string, issue?: string, model:
 
 // ------------------------------------------------------------------------------------------------ shared checks
 
-/** A failure described by KIND and HTTP status only. Provider messages can echo request content, so they are not put in the report. */
+/**
+ * A failure described by KIND, HTTP status and (for an unusable response) our own reason code and counts. Provider messages can echo
+ * request content, and model text is untrusted, so neither is put in the report.
+ */
 function failureLabel(e: unknown): string {
-  const err = classifyAiFailure(e);
-  return `${err.kind}${err.status ? ` (HTTP ${err.status})` : ''}`;
+  return describeAiFailure(classifyAiFailure(e));
 }
 
 /**

@@ -16,8 +16,49 @@ export type AiErrorKind =
   | 'rate_limited' | 'unavailable' | 'timeout' | 'network' | 'auth' | 'quota' | 'not_found' // about the service or its configuration
   | 'bad_request' | 'invalid_response' | 'refused';                                         // about this one input
 
+/**
+ * Why a response that DID arrive was unusable. Several different failures share the kind 'invalid_response'; this tells them apart.
+ * Every code here is an enum chosen by our own code, never text taken from a model, a provider or a record.
+ */
+export type AiFailureReason =
+  | 'response_not_json'          // HTTP 200, but the body was not JSON at all
+  | 'no_choices'                 // JSON, but no usable choices[0]
+  | 'empty_content'              // a choice, but its content was empty/null although generation ended normally
+  | 'reasoning_exhausted_budget' // empty content with finish_reason=length: max_tokens was spent before any answer was written
+  | 'truncated_json'             // content present but cut off (finish_reason=length) before the JSON object closed
+  | 'no_json'                    // content present, but no JSON object could be found in it
+  | 'not_an_object'              // JSON, but an array or a primitive
+  | 'schema_invalid'             // a JSON object that fails the summary rules; `field` names the first failing field
+  | 'provider_error'             // finish_reason=error, or an error object on the choice
+  | 'content_filtered';          // finish_reason=content_filter
+
+/**
+ * Facts about an unusable response, safe to log and to show to an admin: enum codes, counts and field names only.
+ * NEVER put model output, request text, headers, keys or provider messages in here.
+ */
+export interface AiFailureDetail {
+  reason: AiFailureReason;
+  httpStatus?: number;
+  choices?: number;
+  finishReason?: string;
+  nativeFinishReason?: string;
+  contentType?: 'string' | 'array' | 'null' | 'missing' | 'other';
+  contentChars?: number;
+  reasoningChars?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  reasoningTokens?: number;
+  maxTokens?: number;
+  servedModel?: string;
+  provider?: string;
+  /** Shape of any reasoning found inline in `content` as <think> tags (never its text): 'closing_only' = no opening tag, 'unclosed' = never finished. */
+  inlineReasoning?: 'closed' | 'closing_only' | 'unclosed';
+  /** First summary field that failed validation (a fixed name from our own schema). */
+  field?: string;
+}
+
 export class AiCallError extends Error {
-  constructor(message: string, public readonly kind: AiErrorKind, public readonly status: number | null = null) {
+  constructor(message: string, public readonly kind: AiErrorKind, public readonly status: number | null = null, public readonly detail?: AiFailureDetail) {
     super(message);
     this.name = 'AiCallError';
   }
@@ -42,10 +83,24 @@ export function classifyAiFailure(e: unknown): AiCallError {
     if (s === 408 || s === 504 || s === 524) return new AiCallError(msg, 'timeout', s);
     if (s === 0) return new AiCallError(msg, /timeout/i.test(e.message) ? 'timeout' : 'network', 0);
     if (s >= 500) return new AiCallError(msg, 'unavailable', s);
-    if (/malformed JSON/i.test(e.message)) return new AiCallError(msg, 'invalid_response', s);
+    if (/malformed JSON/i.test(e.message)) return new AiCallError(msg, 'invalid_response', s, { reason: 'response_not_json', httpStatus: s });
     return new AiCallError(msg, 'bad_request', s);
   }
   return new AiCallError(msg, 'unavailable');
+}
+
+/** One short, content-free line for the smoke-test report: the kind (and HTTP status), plus the reason and the numbers that explain it. */
+export function describeAiFailure(e: AiCallError): string {
+  const head = `${e.kind}${e.status ? ` (HTTP ${e.status})` : ''}`;
+  const d = e.detail;
+  if (!d) return head;
+  const bits = [
+    d.reason,
+    d.field ? `field=${d.field}` : '',
+    d.finishReason ? `finish_reason=${d.finishReason}` : '',
+    d.completionTokens !== undefined ? `completion_tokens=${d.completionTokens}${d.maxTokens !== undefined ? `/${d.maxTokens}` : ''}` : '',
+  ].filter(Boolean);
+  return `${head} [${bits.join(', ')}]`;
 }
 
 /** For providers that report a failure inside a 200 body ({ error: { code, message } }): treated exactly like the HTTP error it stands for. */
@@ -267,6 +322,12 @@ export async function meteredCall<T>(
     return v;
   } catch (e) {
     usage.failures++;
+    // A response that arrived but was unusable still consumed the provider's tokens: count what it reported (and only that).
+    const spent = e instanceof AiCallError ? e.detail : undefined;
+    if (spent) {
+      usage.input_tokens += Math.max(0, spent.promptTokens ?? 0);
+      usage.output_tokens += Math.max(0, spent.completionTokens ?? 0);
+    }
     throw e;
   } finally {
     const after = http.usage();
