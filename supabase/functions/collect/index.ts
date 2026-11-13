@@ -96,7 +96,7 @@ Deno.serve(async (req) => {
         return json(await runAnalysisTest({ store, budgetMs: 110_000 }));
       }
       case 'ai_smoke_test': {
-        // Admin JWT only (never the schedule secret: this must not be schedulable). Tests Decisions Fast and LFM3 independently on at most 3
+        // Admin JWT only (never the schedule secret: this must not be schedulable). Tests Decisions Fast and the summary engine independently on at most 3
         // existing pending records, reusing the production adapters and cache; no retries, no record status changes. See docs/ai-smoke-test.md.
         // By this point the handler has already read and parsed the JSON body (a malformed body, or one that is not an object, got a 400
         // above) and used `action` to route here. Nothing else in it is used: `source`, `skipAnalysis` and any other field are ignored, and

@@ -1,4 +1,4 @@
-// Shared plumbing for the two optional AI engines (Decisions Fast, LFM3 summaries):
+// Shared plumbing for the two optional AI engines (Decisions Fast, summaries):
 //  - one error type that says whether a failure is about the SERVICE (stop calling it this run) or about the INPUT (record it, back off),
 //  - canonical input hashing for cache identity,
 //  - cachedCompute(): the only place that talks to the persistent cache, so "claim -> compute -> store only validated successes" is enforced once,

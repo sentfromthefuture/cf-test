@@ -169,7 +169,7 @@ export function parseAiSmokeReport(raw: unknown): ParsedReport | null {
   if (!isObj(raw.records) || !isBoundedCount(raw.records.selected, raw.maxRecords)) return null;
   const records = raw.records;
   const decisions = engineView('decisions', 'Decisions Fast', raw.decisions);
-  const lfm3 = engineView('lfm3', 'LFM3', raw.lfm3);
+  const lfm3 = engineView('lfm3', 'Summaries', raw.lfm3); // the wire key stays `lfm3` (backend contract); the model in use is shown from the report
   if (!decisions || !lfm3) return null;
   const reported = raw.overall as OverallStatus;
   // HTTP 200 and even overall:"passed" are not taken on trust: both engines must individually pass.

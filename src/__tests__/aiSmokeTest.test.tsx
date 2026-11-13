@@ -11,7 +11,7 @@ import { AI_SMOKE_TEST_MAX_RECORDS, createSmokeController, parseAiSmokeReport, r
 // ---- fixtures: the shape documented in docs/ai-smoke-test.md
 const usage = (o: Record<string, unknown> = {}) => ({ calls: 3, successes: 3, failures: 0, rateLimited: 0, httpRequests: 3, retries: 0, cacheHits: 0, cacheMisses: 3, inputTokens: 0, outputTokens: 0, reportedCostUsd: 0, costReportedCalls: 3, tokensReported: true, consistent: true, recorded: 'ok', ...o });
 const decisionsOk = (o: Record<string, unknown> = {}) => ({ status: 'passed', model: 'parallel/decisions-fast:free', attempted: 3, succeeded: 3, failed: 0, notCompleted: 0, liveCalls: 3, cacheHits: 0, stopped: null, cache: { verified: 3, unverified: 0 }, output: { table: 'dr_signal_ai', expected: 3, written: 3 }, usage: usage(), ...o });
-const lfm3Ok = (o: Record<string, unknown> = {}) => ({ status: 'passed', model: 'liquid/lfm-3-1.7b:free', attempted: 1, succeeded: 1, failed: 0, notCompleted: 0, liveCalls: 1, cacheHits: 0, stopped: null, cache: { verified: 1, unverified: 0 }, output: { table: null, expected: 0, written: 0 }, usage: usage({ calls: 1, successes: 1, httpRequests: 1, cacheMisses: 1, costReportedCalls: 1 }), ...o });
+const lfm3Ok = (o: Record<string, unknown> = {}) => ({ status: 'passed', model: 'baidu/ernie-5.5-flash-preview:free', attempted: 1, succeeded: 1, failed: 0, notCompleted: 0, liveCalls: 1, cacheHits: 0, stopped: null, cache: { verified: 1, unverified: 0 }, output: { table: null, expected: 0, written: 0 }, usage: usage({ calls: 1, successes: 1, httpRequests: 1, cacheMisses: 1, costReportedCalls: 1 }), ...o });
 const failing = (extra: Record<string, unknown> = {}) => ({ status: 'failed', succeeded: 0, failed: 1, stopped: 'auth (HTTP 401)', issue: 'auth (HTTP 401)', cache: { verified: 0, unverified: 0 }, output: { table: null, expected: 0, written: 0 }, usage: usage({ successes: 0, failures: 1 }), ...extra });
 const report = (o: Record<string, unknown> = {}) => ({
   testMode: true, action: 'ai_smoke_test', maxRecords: 3, overall: 'passed', ok: true,
@@ -77,15 +77,15 @@ test('success: invokes collect once with exactly the ai_smoke_test action and sh
   const r = await runAiSmokeTest(client);
   assert.deepEqual(calls.invoke, [{ name: 'collect', body: { action: 'ai_smoke_test' } }]);
   assert.equal(r.overall, 'passed');
-  assert.deepEqual(r.engines.map((e) => [e.label, e.passed]), [['Decisions Fast', true], ['LFM3', true]]);
+  assert.deepEqual(r.engines.map((e) => [e.label, e.passed]), [['Decisions Fast', true], ['Summaries', true]]);
   const html = view({ phase: 'done', report: r, completedAt: '2026-11-13T10:00:00.000Z' });
   assert.match(html, /Overall: both engines passed/);
   assert.match(html, /Decisions Fast/);
-  assert.match(html, /LFM3/);
+  assert.match(html, /Summaries/);
   assert.match(html, /dateTime="2026-11-13T10:00:00.000Z"/);
 });
 
-test('Decisions Fast fails while LFM3 succeeds (HTTP 200 is not treated as success)', async () => {
+test('Decisions Fast fails while the summary engine succeeds (HTTP 200 is not treated as success)', async () => {
   const r = await run(report({ overall: 'partial', ok: false, decisions: decisionsOk(failing({ attempted: 3, failed: 3, liveCalls: 3 })) }));
   assert.equal(r.overall, 'partial');
   const [d, l] = r.engines;
@@ -96,7 +96,7 @@ test('Decisions Fast fails while LFM3 succeeds (HTTP 200 is not treated as succe
   assert.match(html, /Overall: partial/);
 });
 
-test('LFM3 fails while Decisions Fast succeeds', async () => {
+test('the summary engine fails while Decisions Fast succeeds', async () => {
   const r = await run(report({ overall: 'partial', ok: false, lfm3: lfm3Ok(failing({ attempted: 1, liveCalls: 1, stopped: 'rate_limited (HTTP 429)', issue: 'rate_limited (HTTP 429)', usage: usage({ calls: 1, successes: 0, failures: 1, rateLimited: 1 }) })) }));
   const [d, l] = r.engines;
   assert.equal(d.passed, true);

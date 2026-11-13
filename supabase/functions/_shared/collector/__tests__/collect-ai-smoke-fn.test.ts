@@ -171,7 +171,7 @@ test('admin, both engines enabled: passes on 3 of 25 pending records with exactl
     assert.equal(rep.ok, true);
     assert.equal(rep.records.selected, 3);
     assert.equal(rep.decisions.model, 'parallel/decisions-fast:free');
-    assert.equal(rep.lfm3.model, 'liquid/lfm-3-1.7b:free');
+    assert.equal(rep.lfm3.model, 'baidu/ernie-5.5-flash-preview:free');
     assert.equal(typeof rep.elapsedMs, 'number');
 
     assert.equal(b.ai.filter((a) => a.url === DECISIONS_URL).length, 3);
@@ -223,7 +223,7 @@ test('caller input is ignored: a limit, model, record ids or source in the body 
 test('no automatic retries through the real HTTP client: a 500 from OpenRouter is sent once per engine, and the run stops cleanly', () =>
   withBackend(AI_ON, { pending: 25, ai: '500' }, async (b) => {
     const rep = await (await post({ action: 'ai_smoke_test' }, admin)).json();
-    assert.equal(b.ai.length, 2, 'one Decisions request (circuit breaker stops the rest) and one LFM3 request');
+    assert.equal(b.ai.length, 2, 'one Decisions request (circuit breaker stops the rest) and one summary request');
     assert.equal(rep.overall, 'failed');
     assert.equal(rep.decisions.stopped, 'unavailable (HTTP 500)');
     assert.equal(rep.decisions.usage.retries, 0);

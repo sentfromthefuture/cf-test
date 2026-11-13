@@ -1,11 +1,11 @@
 // End-to-end behaviour of runAnalysis with the two AI engines, against the in-memory store.
 // Proves: Decisions Fast classifies and caches; model outputs are stored apart from demand data; every failure mode degrades safely;
-// LFM3 is optional and can never block core analysis; nothing is called unless explicitly enabled; test mode can reach neither engine.
+// The summary engine is optional and can never block core analysis; nothing is called unless explicitly enabled; test mode can reach neither engine.
 // Payloads are SYNTHETIC (see ai-test-utils.ts): this is not evidence about the live APIs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runAnalysis, AnalysisDeps } from '../analysis.ts';
-import { LFM3_DEFAULT_MODEL, OpenRouterConfig } from '../ai.ts';
+import { OpenRouterConfig, SUMMARY_DEFAULT_MODEL } from '../ai.ts';
 import { DECISIONS_DEFAULT_MODEL, DecisionsConfig } from '../decisions.ts';
 import { HttpError } from '../types.ts';
 import { MemoryStore, rec, silentLog } from './helpers.ts';
@@ -29,7 +29,7 @@ const requeue = (s: MemoryStore) => { for (const r of s.records.values()) { r.st
 
 const decisionsCfg = (http: ReturnType<typeof scriptedHttp>['http'], over: Partial<DecisionsConfig> = {}): DecisionsConfig =>
   ({ apiKey: 'sk-or-v1-test-key-not-real', model: DECISIONS_DEFAULT_MODEL, configVersion: 'decisions-v1', http, maxLivePerRun: 20, minProblemProbability: 0.5, ...over });
-const lfmCfg = (http: ReturnType<typeof scriptedHttp>['http']): OpenRouterConfig => ({ apiKey: 'sk-or-v1-test-key-not-real', model: LFM3_DEFAULT_MODEL, configVersion: 'summary-v1', http });
+const lfmCfg = (http: ReturnType<typeof scriptedHttp>['http']): OpenRouterConfig => ({ apiKey: 'sk-or-v1-test-key-not-real', model: SUMMARY_DEFAULT_MODEL, configVersion: 'summary-v1', http });
 const deps = (store: MemoryStore, over: Partial<AnalysisDeps> = {}): AnalysisDeps => ({ store, gemini: null, log: silentLog, timeLeftMs: () => 120_000, ...over });
 
 // ------------------------------------------------------------------ Decisions Fast end to end
@@ -250,8 +250,8 @@ test('Decisions: with no working cache the engine spends nothing and the run sur
   assert.equal(count(store, 'pending'), 3);
 });
 
-// ------------------------------------------------------------------ LFM3 is optional: it can never block core analysis
-test('LFM3 failing (rate limit) does not touch core analysis; it stops after one request and nothing retries in a loop', async () => {
+// ------------------------------------------------------------------ the summary engine is optional: it can never block core analysis
+test('the summary engine failing (rate limit) does not touch core analysis; it stops after one request and nothing retries in a loop', async () => {
   const store = await seeded(new SummaryStore(), 4);
   store.needing = clusters(3);
   const lfm = scriptedHttp(() => { throw new HttpError('HTTP 429', 429); });
@@ -267,7 +267,7 @@ test('LFM3 failing (rate limit) does not touch core analysis; it stops after one
   assert.equal(store.locks.size, 0);
 });
 
-test('LFM3 returning garbage or being down never raises, and never stops Decisions or the heuristic path', async () => {
+test('the summary engine returning garbage or being down never raises, and never stops Decisions or the heuristic path', async () => {
   for (const handler of [() => chat('no json at all'), () => { throw new HttpError('HTTP 503', 503); }, () => ({}), () => { throw new Error('socket hang up'); }]) {
     const store = await seeded(new SummaryStore(), 3);
     store.needing = clusters(2);
@@ -280,7 +280,7 @@ test('LFM3 returning garbage or being down never raises, and never stops Decisio
   }
 });
 
-test('LFM3: an unusable summary for one cluster does not stop the next; it is not re-sent while cooling down', async () => {
+test('summary engine: an unusable summary for one cluster does not stop the next; it is not re-sent while cooling down', async () => {
   const store = await seeded(new SummaryStore(), 2);
   store.needing = clusters(2);
   const lfm = scriptedHttp((_c, n) => (n === 1 ? chat('prose only') : chat(JSON.stringify(good))));
@@ -294,7 +294,7 @@ test('LFM3: an unusable summary for one cluster does not stop the next; it is no
   assert.equal(s2.summaryAi!.cacheHits, 1);
 });
 
-test('LFM3 summaries are cached: an unchanged cluster is never summarised twice', async () => {
+test('summaries are cached: an unchanged cluster is never summarised twice', async () => {
   const store = await seeded(new SummaryStore(), 2);
   store.needing = clusters(2);
   const lfm = scriptedHttp(() => chat(JSON.stringify(good)));
@@ -311,7 +311,7 @@ test('LFM3 summaries are cached: an unchanged cluster is never summarised twice'
   assert.equal(usage[1].usage.cache_hits, 2);
 });
 
-test('LFM3 is not used unless configured, and it never replaces Decisions or runs on the Decisions endpoint', async () => {
+test('the summary engine is not used unless configured, and it never replaces Decisions or runs on the Decisions endpoint', async () => {
   const store = await seeded(new SummaryStore(), 2);
   store.needing = clusters(1);
   const decisions = scriptedHttp(() => decisionsBody());
@@ -323,7 +323,7 @@ test('LFM3 is not used unless configured, and it never replaces Decisions or run
   store2.needing = clusters(1);
   await runAnalysis(deps(store2, { decisions: decisionsCfg(both.http), openrouter: lfmCfg(both.http) }));
   const models = both.calls.map((c) => `${c.url.split('/').slice(-2).join('/')} ${c.body.model}`).sort();
-  assert.deepEqual(models, ['alpha/decisions parallel/decisions-fast:free', 'alpha/decisions parallel/decisions-fast:free', 'chat/completions liquid/lfm-3-1.7b:free']);
+  assert.deepEqual(models, ['alpha/decisions parallel/decisions-fast:free', 'alpha/decisions parallel/decisions-fast:free', 'chat/completions baidu/ernie-5.5-flash-preview:free']);
   assert.ok(both.calls.every((c) => /:free$/.test(c.body.model)), 'every request in the system targets an explicit free model');
 });
 
