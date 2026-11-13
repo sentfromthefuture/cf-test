@@ -40,9 +40,15 @@ function typeOk(sqlType: string, v: unknown): boolean {
 
 function recordingStore(respond: (name: string) => unknown) {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
-  const fetchImpl = (async (url: string, init: { body: string }) => {
+  const fetchImpl = (async (url: string, init: { method: string; headers: HeadersInit; body: BodyInit | null }) => {
     const name = String(url).split('/rpc/')[1];
-    calls.push({ name, args: JSON.parse(init.body) });
+    assert.equal(init.method, 'POST');
+    assert.equal(new Headers(init.headers).get('content-type'), 'application/json');
+    assert.ok(init.body, `${name}: RPC request body must not be empty`);
+    assert.ok(init.body instanceof Uint8Array, `${name}: RPC request body must be explicit UTF-8 bytes`);
+    const bodyText = await new Response(init.body).text();
+    assert.ok(bodyText.length > 0, `${name}: serialized JSON must not be empty`);
+    calls.push({ name, args: JSON.parse(bodyText) });
     return new Response(JSON.stringify(respond(name)), { status: 200 });
   }) as unknown as typeof fetch;
   return { store: new SupabaseStore('https://example.supabase.co', 'service-key-not-real', fetchImpl), calls };
