@@ -233,11 +233,14 @@ A stored blueprint therefore has `verification.status` of `verified` or `verifie
 
 ## 8. Untrusted content and prompt injection
 
-- Every excerpt and title is untrusted text written by third parties. It is sent only as JSON string values, under a system instruction that says it is data.
-- The model has no tools and no way to act. The worst outcome of an injection is a bad document, not an action.
-- Ids are accepted only if they were issued for this request. Text inside an excerpt that mentions `E99`, `M99` or "output the following JSON" cannot create a resolvable reference.
-- Injected URLs and SQL are caught by §5.1 step 9. Injected prose that merely biases a recommendation cannot be detected mechanically; that is covered by the residual-risk section and by showing the cited excerpt beside every `verified_evidence` claim.
-- The UI must render all model text **as text** (no HTML or Markdown execution) and show evidence URLs only from the backend's `evidence_index`.
+- Every title and excerpt from a third-party discussion is untrusted data, never an instruction. The fact that it is public, cited, or stored in a validated evidence pack does not make its text trusted.
+- Every free-text field produced by an earlier model pass is also untrusted data, even after the surrounding object passes schema validation. Pass B and Pass C must never follow instructions embedded in prior-pass fields; those strings are content to analyze, not instructions.
+- Before building a handoff, the backend validates the prior pass against its exact schema and allowlist: required fields, types, enums, count and length limits, identifier/reference integrity, and content-policy checks. Structural, identifier, or rejected-content failures stop the handoff. Unknown or out-of-scope fields are not forwarded. The backend constructs only the explicitly listed PassBInput or PassCInput fields from validated output; it never forwards raw prior-pass JSON.
+- Validation is not sanitization and does not make free text trustworthy. The handoff remains constrained JSON data, and the pass system prompt repeats the instruction not to obey text inside any field. Schema checks cannot guarantee that a semantically persuasive injection will not bias model output.
+- The model has no tools and no way to act. The remaining risk is a misleading document, not a direct action; all output goes through backend validation, and Pass A claims also go through the evidence checks.
+- Ids are accepted only if they were issued for this request. Text inside an excerpt or prior-pass field that mentions E99, M99, or an instruction to output particular content cannot create a resolvable reference or override the system prompt.
+- Injected URLs and SQL are caught by §5.1 step 9. Other injected prose may still bias a recommendation; this residual risk is disclosed, and the UI shows the cited excerpt beside every verified_evidence claim.
+- The UI must render all model text as text (no HTML or Markdown execution) and show evidence URLs only from the backend's evidence_index.
 
 ## 9. Licensing, attribution and privacy
 
@@ -246,7 +249,7 @@ A stored blueprint therefore has `verification.status` of `verified` or `verifie
 - The pack contains public text only. It excludes `author_ref` and `attribution`. Public text can still contain personal data written by its author; the pack does not scrub it and the design does not claim to.
 - Pass B and Pass C never receive excerpts (product-blueprint §3.10), which keeps raw third-party text out of the largest outputs.
 - **Takedown path.** The cache row's existing `citations` column can hold the resolved record ids of a blueprint (reliability §10). A removed source record can then be traced to the blueprints that cite it and those entries invalidated through the existing `dr_ai_cache_invalidate`.
-- The free ERNIE variant may log or train on prompts (the repository's own caveat, still an open confirmation item in `docs/AI_ARCHITECTURE.md` §10). The same exposure applies here and should be confirmed before enabling.
+- **Release blocker:** do not send any third-party discussion content to the free ERNIE provider until the applicable data handling, retention, logging, and training/privacy terms have been reviewed against authoritative provider evidence. That review has not been completed here; no privacy verification is claimed. Until it is complete, the blueprint engine must not transmit discussion content to that provider.
 
 ## 10. What verification does not prove
 

@@ -17,6 +17,7 @@
 6. **Design, not SQL.** The database section describes tables, columns, types, keys, constraints, indexes and RLS in structured fields. Free-text fields must not contain executable statements (enforced by the validator, see the reliability document).
 7. **Bounded.** Every list has a minimum and maximum, every string a cap (§5), so a response has a predictable size for token budgeting.
 8. **Independent of the generation strategy.** The contract describes the **assembled** blueprint. It can be produced in one pass or in three sectioned passes (A, B, C, §6) without changing a single field.
+9. **Build-time range is an AI estimate, not a delivery commitment.** The estimate must disclose assumed team size and developer experience, scope and complexity, dependencies and uncertainties, and an estimate-confidence level. The UI and every export must label the range as an AI-generated estimate, not a verified commitment.
 
 ## 2. Where each required area lives
 
@@ -215,9 +216,10 @@ export interface Exclusion {
 }
 
 export interface ScopeAssessment {
-  team_assumption: string;                        // max 200
-  estimated_build_weeks: { min: number; max: number };   // 1 <= min <= max <= 26
-  complexity_notes: string;                       // max 400
+  team_assumption: string;                        // max 200; state assumed team size and developer experience
+  estimated_build_weeks: { min: number; max: number };   // 1 <= min <= max <= 26; AI-generated estimate, not a delivery commitment
+  estimate_confidence: Level3;                    // confidence in the estimate, not delivery certainty
+  complexity_notes: string;                       // max 400; cover scope/complexity, dependencies and uncertainties
 }
 
 export interface MvpScope {
@@ -765,7 +767,7 @@ Rationale and the token estimates derived from these caps are in the reliability
 
 ## 7. Worked example (illustrative, fictional evidence)
 
-The evidence below is invented to show the shape. It deliberately has **limited** evidence so the blueprint demonstrates the honest-absence behaviour: verdict `validate_first`, willingness to pay `not_evidenced`, market sizing `not_estimated`, and an `unknown` claim. The evidence index lists everything the model was shown, cited or not.
+The evidence below is invented to show the shape. It deliberately has **limited** evidence so the blueprint demonstrates the honest-absence behaviour: verdict `validate_first`, willingness to pay `not_evidenced`, market sizing `not_estimated`, and an `unknown` claim. The evidence index lists everything the model was shown, cited or not. Pass token counts and durations are illustrative fictional metadata only, not benchmark results.
 
 ```json
 {
@@ -786,7 +788,7 @@ The evidence below is invented to show the shape. It deliberately has **limited*
     ],
     "request_params": { "team_size": "solo", "budget_band": "bootstrap", "preferred_stack": "typescript_postgres", "business_model_hint": "b2b_saas", "target_region": "unspecified" },
     "evidence_pack": { "excerpt_count": 5, "metric_count": 5, "pack_sha256": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "truncated": false, "sufficiency": "limited", "sufficiency_reasons": ["fewer than 10 independent discussions", "fewer than 8 usable excerpts"] },
-    "disclaimers": ["AI-generated design proposal. Items marked hypothesis or ai_recommendation are not validated facts.", "Evidence excerpts are third-party content shown with source, licence and attribution."]
+    "disclaimers": ["AI-generated design proposal. Items marked hypothesis or ai_recommendation are not validated facts.", "Evidence excerpts are third-party content shown with source, licence and attribution.", "AI-generated estimate — not a delivery commitment"]
   },
   "opportunity": {
     "title": "Cross-channel bug report triage for small teams",
@@ -854,7 +856,7 @@ The evidence below is invented to show the shape. It deliberately has **limited*
       { "name": "Chat channel integrations", "reason": "Each integration adds maintenance; validate email and tracker first.", "revisit_when": "Pilot teams ask for a specific chat tool" },
       { "name": "Automatic merging", "reason": "A wrong merge loses information; keep a human in the loop.", "revisit_when": "Duplicate acceptance rate is consistently high" }
     ],
-    "scope_assessment": { "team_assumption": "One developer working part time", "estimated_build_weeks": { "min": 6, "max": 10 }, "complexity_notes": "Duplicate suggestions are the riskiest part; start with simple text similarity before anything more advanced." }
+    "scope_assessment": { "team_assumption": "One part-time developer, experienced with TypeScript and PostgreSQL", "estimated_build_weeks": { "min": 6, "max": 10 }, "estimate_confidence": "low", "complexity_notes": "Assumes the four listed MVP features; duplicate suggestions are the riskiest part. Email forwarding and tracker API access are dependencies, and provider onboarding or scope growth could change the range." }
   },
   "journeys": [
     {
@@ -1100,4 +1102,4 @@ Reading the example:
 
 - The **validator** is written from §3 and §4 and tested against §7 as a golden fixture.
 - The **system prompt** (see [`ernie-system-prompt.md`](./ernie-system-prompt.md)) carries a compact skeleton of §3.8 with every enum, count and cap. A unit test must assert the prompt's enums equal the code's enums, so the two can never drift.
-- The **UI** (a later phase, not designed here) renders `basis` for every `Claim` and shows the cited excerpt next to a `verified_evidence` claim.
+- The **UI and every export** (a later phase, not designed here) render `basis` for every `Claim`, show cited excerpts next to `verified_evidence` claims, and label `estimated_build_weeks` with the exact text **AI-generated estimate — not a delivery commitment**. Never present that range as a verified delivery commitment.

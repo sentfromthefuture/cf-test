@@ -10,8 +10,8 @@ Tags as in the audit: **[V]** verified in the repository at commit `76780ee`, **
 | # | Decision | Section |
 |---|---|---|
 | 1 | The engine runs as its **own Supabase Edge Function**, not inside `collect` and not as a Pages Function. **[P]**, approval requested | §1 |
-| 2 | The blueprint is produced in **three sectioned passes**, **one live pass per invocation**; the client re-calls the same idempotent endpoint until it is ready. The contract is unchanged if this is later collapsed to one pass. **[P]** | §1, §3 |
-| 3 | The engine uses an **engine-specific HTTP client** (120 s per pass, no retries) and an overall deadline that also covers reading the response body. The shared client and its 30 s timeout are **not changed**. **[P]** | §2 |
+| 2 | The blueprint uses **three sectioned passes A/B/C**, with one live pass per invocation as the current proposal; the client re-calls the same idempotent endpoint until it is ready. The three-pass architecture is preserved; execution mode and performance settings remain provisional until benchmarked. **[P]** | §§1, 3, 16 |
+| 3 | The engine uses an **engine-specific HTTP client** with no retries; the 120 s timeout is only a planning example, not a selected value. A full-body deadline is required; the overall deadline and per-pass timeouts remain unselected until representative benchmarking. The shared client and its 30 s timeout are **not changed**. **[P]** | §§2, 16 |
 | 4 | Validation is hand-written, strict, and **rejects rather than guesses**; evidence repairs only ever lower trust. | §4–§6 |
 | 5 | The cache **reuses `dr_ai_cache` and `dr_ai_usage`** with a new value `blueprint`, by widening three `CHECK` constraints in a later migration. No SQL function changes. **[P]** | §11 |
 | 6 | Cache identity, versions and the global cache-version override are **separate** from Decisions Fast and the summary engine. | §9, §10 |
@@ -74,6 +74,9 @@ export type BlueprintResponse =
 
 HTTP mapping: `ready`, `in_progress`, `busy`, `insufficient_evidence` → 200; `failed` → 200 with `state: failed` (a normal outcome, not a transport error); `unavailable` → 503; `quota_exceeded` → 429; `forbidden` → 403; unauthenticated → 401. These are proposals.
 
+**Unverified synchronous-execution gate.** This flow assumes one live pass can finish within a synchronous Edge Function invocation. That has not been verified. No overall generation deadline or user-facing wait-time target is selected. Benchmark per-pass and end-to-end behaviour, including actual platform limits, before finalising those choices. If a synchronous pass cannot reliably finish within the Edge limit and acceptable wait time, use background/async generation with persisted job state and status polling; keep the same three A/B/C passes and contract.
+
+
 ## 2. Engine-specific HTTP client and timeout
 
 ### 2.1 Facts
@@ -103,7 +106,7 @@ Even a single sectioned pass of 6,000 tokens exceeds 30 s at the pessimistic fig
 ```ts
 // sketch, not implemented
 const blueprintHttp = createHttpClient({
-  timeoutMs: BLUEPRINT_PASS_TIMEOUT_MS,        // default 120_000 (allowed 30_000-140_000)
+  timeoutMs: BLUEPRINT_PASS_TIMEOUT_MS,        // provisional planning example only; finalize after the representative benchmark in §16
   retries: 0,                                  // never retry a 100 s call; a failed pass is a recorded failure
   maxInlineWaitMs: 15_000,                     // a long Retry-After becomes a rate_limited error, not a sleep
   minIntervalMs: { blueprint: BLUEPRINT_MIN_INTERVAL_MS },   // default 3_000, own pacing key
@@ -132,11 +135,11 @@ Output size is driven by list counts (contract §5). Scaling the worked example 
 | Typical (mid-range counts, strings ×1.5) | 6.4k | 7.1k | 5.3k | 18.8k |
 | Maximum counts (strings ×2) | 12.0k | 14.4k | 10.0k | 36.4k |
 
-The prompt asks for the lower half of each range and compact JSON (prompt document §3.1, rules 1 and 10), so the **planning figure** is the midpoint between the first two rows: **A 4.5k, B 4.7k, C 3.5k, total 12.7k**. Adding an assumed 2.5–3k reasoning tokens per pass, a single call would need ~16k completion tokens: ~178 s at 90 tok/s and ~92 s at 173 tok/s. That is outside any budget at the pessimistic figure, and risky at the optimistic one. Sectioning is therefore the baseline.
+The prompt asks for the lower half of each range and compact JSON (prompt document §3.1, rules 1 and 10), so the **planning figure** is the midpoint between the first two rows: **A 4.5k, B 4.7k, C 3.5k, total 12.7k**. Adding an assumed 2.5–3k reasoning tokens per pass, a single call would need ~16k completion tokens: ~178 s at the unverified 90 tok/s assumption and ~92 s at the unverified 173 tok/s assumption. These calculations are sizing estimates, not measured performance. The three-pass A/B/C architecture is retained; benchmark results may change its budgets and execution mode, not collapse or redefine its passes.
 
-Cost of sectioning: three calls instead of one against the free tier, plus cross-pass consistency work (handled by handoff ids and by integrity checks at assembly). Benefit: each pass has a modest budget, a failed pass does not discard the others, and only Pass A ever receives untrusted text.
+Cost of sectioning: three calls instead of one against the free tier, plus cross-pass consistency work (handled by constrained handoff ids and integrity checks at assembly). Benefit: each pass has a modest budget and a failed pass does not discard the others. Only Pass A receives raw third-party discussion content; B and C receive constrained, backend-validated fields that remain untrusted text.
 
-### 3.2 Plan and budgets (proposed; constants of the configuration version)
+### 3.2 Plan and budgets (planning estimates only; not final configuration values)
 
 | | Pass A (strategy and scope) | Pass B (architecture and data) | Pass C (delivery and assurance) |
 |---|---:|---:|---:|
@@ -144,14 +147,14 @@ Cost of sectioning: three calls instead of one against the free tier, plus cross
 | User message (est.) | up to ~4.2k (pack at caps ≈ 4.0k + request) | ~0.9k | ~1.3k |
 | Planning figure for output JSON | 4.5k | 4.7k | 3.5k |
 | Reasoning allowance (assumption) | ~2.9k | ~2.6k | ~2.5k |
-| **`max_tokens`** | **8,500** | **8,500** | **7,500** |
-| Worst case at 90 tok/s | 94 s | 94 s | 83 s |
-| Worst case at 173 tok/s | 49 s | 49 s | 43 s |
-| Per-pass timeout | 120 s | 120 s | 120 s |
+| **Planning `max_tokens` (not final)** | **8,500** | **8,500** | **7,500** |
+| Estimated duration at unverified 90 tok/s | 94 s | 94 s | 83 s |
+| Estimated duration at unverified 173 tok/s | 49 s | 49 s | 43 s |
+| Per-pass timeout (planning example, not final) | 120 s | 120 s | 120 s |
 
-Rule that generated the table, to be applied again once real throughput is known: `max_tokens ≤ 0.8 × timeout × measured_median_tok_per_s` (at 120 s and 90 tok/s that is 8,640). The context window (documented as very large in `ai.ts`, **[A]**) is not the constraint; **output time is**.
+Rule that generated the table, to be considered only after real throughput is measured: `max_tokens ≤ 0.8 × timeout × measured_median_tok_per_s` (at the planning example of 120 s and the unverified 90 tok/s figure, that calculation is 8,640). This heuristic is not a benchmark result or a final setting. No representative performance benchmark has been run; per-pass timeouts, output-token budgets, the overall generation deadline, the user-facing wait target and synchronous Edge Function viability all remain undecided until §16. The context window (documented as very large in `ai.ts`, **[A]**) is not the constraint; **output time is**.
 
-**If the measurement spike shows a median below about 90 tok/s**, the pass plan is data, not code structure: A and B split into two passes each (for example strategy and scope; architecture and database), with no contract change. **If it shows ≥ 170 tok/s with acceptable reasoning overhead**, a single pass can be reconsidered. The spike is a Phase B gate (§16).
+The representative benchmark is a Phase B gate (§16). It may determine budgets and whether each pass runs synchronously or through a background/async job, but this correction preserves the existing three-pass A/B/C architecture; it does not authorize splitting, collapsing or otherwise redefining those passes.
 
 Token ceilings per assembled system prompt and per user message are asserted in tests (Phase B), so a prompt edit that bloats a pass fails CI.
 
@@ -177,6 +180,8 @@ Token ceilings per assembled system prompt and per user message are asserted in 
 | T7 | Content policy: no URL, no SQL-like statement in any model-written string | reject |
 
 Truncation must not split a UTF-16 surrogate pair. Blueprint text is long and multilingual excerpts are paraphrased into it; a lone surrogate makes PostgREST reject the whole body (HTTP 400 `PGRST102`), which `toPostgrestJson` already scrubs for every RPC call **[V]**. A regression test with a truncated emoji and a truncated CJK string is required anyway.
+
+Before Pass B or C, the backend must validate the preceding output against that pass's exact schema, types, enums, counts, string caps, identifier/cross-reference rules and content policy, then build a fresh DTO from the explicit handoff allowlist in `ernie-system-prompt.md` §4. It must not pass through raw model JSON or unknown fields. Validation constrains structure; it does not make any free-text field trusted or safe to treat as an instruction.
 
 ### 4.3 Required versus optional
 
@@ -413,7 +418,7 @@ All names are Edge secrets, set explicitly, validated at start, and **fail close
 | `BLUEPRINT_ENABLED` | off | only the literal `true` enables; independent of `OPENROUTER_ENABLED` and `DECISIONS_ENABLED` |
 | `BLUEPRINT_MODEL` | `baidu/ernie-5.5-flash-preview:free` | must pass `isFreeModelSlug` |
 | `OPENROUTER_API_KEY` | existing secret | shared with the other engines, which means a **shared free-tier quota** (audit R6) |
-| `BLUEPRINT_PASS_TIMEOUT_MS` | `120000` | allowed 30,000–140,000 |
+| `BLUEPRINT_PASS_TIMEOUT_MS` | unset until benchmark | `120000` ms is a planning example only, not a selected default; allowed bounds also require benchmark and platform validation |
 | `BLUEPRINT_MIN_INTERVAL_MS` | `3000` | own pacing key `blueprint` |
 | `BLUEPRINT_MAX_LIVE_PER_DAY` | `30` | global live passes per UTC day |
 | `BLUEPRINT_USER_DAILY_PASSES` | not set (requires a product decision, Q1) | per-user cap |
@@ -436,6 +441,8 @@ Regression guards to add in the implementation phase: the existing 335-test suit
 
 ## 15. Security and logging
 
+**Release blocker:** do not send third-party discussion content to the free ERNIE provider until the applicable data handling, retention, logging and training/privacy terms have been reviewed against authoritative provider evidence. That review has not been completed here; no privacy verification is claimed. This gate must be cleared before enabling generation or running content-bearing performance benchmarks.
+
 - **Order of checks:** JWT → entitlement (live subscription, plan allowed) → per-user quota → global daily cap → `BLUEPRINT_ENABLED` → sufficiency → cache → model. A cache hit is returned only after the first four.
 - The user id never appears in a prompt, a cache key or a stored blueprint. No free-text user input reaches the model in v1.
 - **Logs are content-free,** like the existing engines **[V]**: counts, fixed codes, JSON Pointers, token numbers. Never a prompt, a model output, an excerpt or a key; errors pass through the existing redaction (`safeError`).
@@ -444,7 +451,7 @@ Regression guards to add in the implementation phase: the existing 335-test suit
 
 ## 16. Tests and gates for the implementation phase (not run now)
 
-1. **Measurement spike (a gate before locking §3):** on a handful of real clusters, measure completion tokens, reasoning tokens, tokens per second, finish reasons and JSON validity per pass on the free ERNIE route. This settles budgets, pass count and the 90-versus-173 question. It spends free-tier requests only and runs from a throwaway script, not from production.
+1. **Representative performance benchmark (a prerequisite before finalising runtime settings):** after the provider privacy release gate in §15 is cleared, benchmark representative cluster/evidence sizes and record each pass's full response time (including body read), completion and reasoning token counts, finish reason, JSON/schema validity, and observed user-facing wait; also measure end-to-end time across the three passes and re-calls, and verify synchronous Edge Function limits. No representative benchmark has been run and no result is asserted here. Until the privacy review is complete, use synthetic payloads only; synthetic runs do not satisfy the representative-content gate or justify final settings. Only the benchmark may determine per-pass timeouts, the overall generation deadline, output-token budgets, wait-time target and synchronous viability. If synchronous execution is unreliable within actual platform limits or the agreed wait target, use background/async generation with durable job status and polling, without changing the three-pass A/B/C contract.
 2. Validator: the §7 worked example as an accepted fixture; a mutation for every rejection and repair; the lone-surrogate case; a stalled-body fake for `withBodyDeadline`.
 3. Evidence: reference resolution, each grounding guard, the willingness-to-pay rule, the repair thresholds.
 4. Cache: identity stability (same pack → same hash; bucketed metric drift → same hash; reordered input → same hash), upstream-result hashing, fencing and cooldown behaviour through the existing machinery, `revive` re-validation.
@@ -458,10 +465,10 @@ Regression guards to add in the implementation phase: the existing 335-test suit
 | Q1 | Which plans may generate blueprints, and what per-user daily limit? (Pro and Business as for briefs, or Business only?) | §12.2 |
 | Q2 | Approve option B (new Edge Function) over a Pages Function? | §1 |
 | Q3 | Edge Function wall-clock and background-task limits for this project's plan (not verified; `runner.ts` says ~150 s on the free plan). | §1.2, §3.2 |
-| Q4 | Measured ERNIE throughput and reasoning overhead (90 vs 173 tok/s). | §3 |
+| Q4 | Representative measured ERNIE throughput and reasoning overhead; the quoted 90 and 173 tok/s figures remain unverified assumptions. | §3, §16 |
 | Q5 | Is non-streaming acceptable for v1? Streaming would expose progress and avoid long silent waits but complicates validation and metering. | §2 |
 | Q6 | Sufficiency thresholds (≥ 4 discussions, ≥ 3 excerpts, "adequate" = high confidence and ≥ 8 excerpts) and the repair rejection thresholds: accept as starting values? | evidence contract §3.6, §7 |
 | Q7 | Count rules: strict rejection (proposed) or tolerant truncation for more lists, given a free preview model? Decide after the spike. | §4.2 |
-| Q8 | Privacy: confirmation that the free ERNIE route's logging and training terms are acceptable (already an open item in `docs/AI_ARCHITECTURE.md` §10). | enabling |
+| Q8 | Review the free ERNIE provider's applicable data handling, retention, logging and training/privacy terms against authoritative evidence; no third-party discussion content may be sent before this is completed. No review or privacy verification is claimed here. | release blocker; content-bearing benchmarking and enabling |
 | Q9 | Constraint names and row counts in the live database, and whether `20261109000000_ai_results_cache.sql` is applied there. | §11 |
 | Q10 | One OpenRouter key shared by all engines means a shared free-tier quota. Acceptable, or a separate key/account for blueprints? | §13 |
