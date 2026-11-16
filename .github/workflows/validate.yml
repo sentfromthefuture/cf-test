@@ -2,7 +2,7 @@ name: Validate DemandRadar
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/ernie-blueprint-phase-a']
   push:
     branches: [main, 'redesign/**']
 
@@ -39,3 +39,6 @@ jobs:
 
       - name: Frontend tests
         run: bun run test:frontend
+
+      - name: Blueprint contract tests
+        run: bun run test:blueprint
