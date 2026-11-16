@@ -4,14 +4,15 @@
 //   3. disclaimers are fixed backend text
 //   4. cluster metrics belong to meta.cluster_id
 //   5. database rules: what the approved documentation requires, and what it does not
+//   6. downgraded_from is rejected in the assembled blueprint (Phase A2 policy), and still in model output
 // Each correction has positive and negative tests. The worked example stays valid and unchanged.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { ACCEPTED_VERIFICATION_STATUS, ESTIMATE_DISCLAIMER, FIXED_DISCLAIMERS, REPAIR_ACTION, REQUIRED_VERIFICATION_CHECKS } from '../constants.ts';
 import type { ProductBlueprintV1 } from '../contract.ts';
-import { validateProductBlueprint } from '../validate.ts';
-import { assertAccepted, assertNoError, assertRejected, deepFreeze, errorsOf, getAt, setAt, WORKED_EXAMPLE_DOC, validBlueprint } from './helpers.ts';
+import { validateBlueprintModelOutput, validateProductBlueprint } from '../validate.ts';
+import { assertAccepted, assertNoError, assertRejected, deepFreeze, errorsOf, getAt, setAt, validBlueprint, validModelOutput, WORKED_EXAMPLE_DOC } from './helpers.ts';
 
 const bp = (): ProductBlueprintV1 => validBlueprint();
 const validate = (d: unknown) => validateProductBlueprint(d);
@@ -342,4 +343,118 @@ test('the example is consistent with both undocumented rules, so adding them lat
       }
     }
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// 6. downgraded_from
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Documented contract: product-blueprint-v1.md 3.1 types `downgraded_from?: Basis` as "BACKEND ONLY. Present when the verifier lowered the basis; the
+// model must not write it", and evidence-contract.md 5.2 and 7 record every downgrade as a `downgraded_basis` repair. Phase A2 is rejection-only and
+// requires status "verified" with no repairs, so a stored claim carrying downgraded_from would contradict that record. It is therefore rejected in the
+// assembled blueprint as a Phase A2 policy (narrower than the documented type). Model output keeps its own, original rejection.
+
+/** Pointers of every Claim-shaped object, found by a generic scan that does not use the validator's own claim list. */
+function claimPointers(node: unknown, pointer = '', out: string[] = []): string[] {
+  if (Array.isArray(node)) { node.forEach((v, i) => claimPointers(v, `${pointer}/${i}`, out)); return out; }
+  if (node === null || typeof node !== 'object') return out;
+  const rec = node as Record<string, unknown>;
+  if ('text' in rec && 'basis' in rec && 'evidence_refs' in rec) out.push(pointer);
+  for (const [k, v] of Object.entries(rec)) claimPointers(v, `${pointer}/${k}`, out);
+  return out;
+}
+
+test('the worked example carries no downgraded_from and remains valid and unchanged', () => {
+  const text = readFileSync(WORKED_EXAMPLE_DOC, 'utf8');
+  const block = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => m[1])[0];
+  assert.ok(!block.includes('downgraded_from'));
+  assert.deepEqual(bp(), JSON.parse(block));
+  assert.ok(!JSON.stringify(bp()).includes('downgraded_from'));
+  assertAccepted(validate(bp()));
+});
+
+test('every claim in the assembled blueprint rejects downgraded_from, whatever basis it names', () => {
+  const pointers = claimPointers(bp());
+  assert.equal(pointers.length, 24);
+  for (const p of pointers) {
+    for (const basis of ['verified_evidence', 'ai_recommendation', 'hypothesis', 'unknown']) {
+      const d = bp();
+      setAt(d, `${p}/downgraded_from`, basis);
+      const r = validate(d);
+      assertRejected(r, 'downgraded_from_not_allowed', `${p}/downgraded_from`, basis);
+      assert.deepEqual(errorsOf(r).map((e) => `${e.code}@${e.path}`), [`downgraded_from_not_allowed@${p}/downgraded_from`], 'exactly one error, nothing else changed');
+    }
+  }
+});
+
+test('the contradiction is the point: the same blueprint is verified, repair-free, and still rejected', () => {
+  const d = bp();
+  assert.equal(d.verification.status, 'verified');
+  assert.deepEqual(d.verification.repairs, []);
+  setAt(d, '/opportunity/problem_statement/downgraded_from', 'verified_evidence');
+  assert.equal(d.verification.status, 'verified');
+  assert.deepEqual(d.verification.repairs, []);
+  assertRejected(validate(d), 'downgraded_from_not_allowed', '/opportunity/problem_statement/downgraded_from');
+});
+
+test('presence is what is rejected, not the value: an invalid, null or oddly typed value gets the same error', () => {
+  for (const value of ['made_up', '', null, 5, true, {}, []]) {
+    const d = bp();
+    setAt(d, '/risks/risks/0/claim/downgraded_from', value);
+    const r = validate(d);
+    assertRejected(r, 'downgraded_from_not_allowed', '/risks/risks/0/claim/downgraded_from', JSON.stringify(value));
+    assert.ok(!errorsOf(r).some((e) => e.code === 'invalid_enum' || e.code === 'invalid_type'), 'no value-level error: the field itself is not allowed');
+  }
+});
+
+test('the error is content-free and nothing is repaired or removed', () => {
+  const MARK = 'ZZ_SECRET_DOWNGRADE_VALUE';
+  const input = bp();
+  setAt(input, '/commercial/business_model/downgraded_from', MARK);
+  deepFreeze(input);
+  const before = JSON.stringify(input);
+  const r = validate(input);
+  assertRejected(r, 'downgraded_from_not_allowed', '/commercial/business_model/downgraded_from');
+  assert.ok(!JSON.stringify(errorsOf(r)).includes(MARK));
+  assert.ok(!('value' in r), 'no partial result is returned');
+  assert.equal(JSON.stringify(input), before, 'the field is not stripped from the input');
+});
+
+test('several claims with downgraded_from are each reported, alongside any other shape error', () => {
+  const d = bp();
+  setAt(d, '/opportunity/thesis/0/downgraded_from', 'hypothesis');
+  setAt(d, '/personas/0/current_workaround/downgraded_from', 'unknown');
+  setAt(d, '/opportunity/title', 42);
+  const r = validate(d);
+  assertRejected(r, 'downgraded_from_not_allowed', '/opportunity/thesis/0/downgraded_from');
+  assertRejected(r, 'downgraded_from_not_allowed', '/personas/0/current_workaround/downgraded_from');
+  assertRejected(r, 'invalid_type', '/opportunity/title');
+});
+
+test('removing the field makes the blueprint valid again: no other rule depends on it', () => {
+  const d = bp();
+  setAt(d, '/opportunity/affected_users/downgraded_from', 'verified_evidence');
+  assert.equal(validate(d).ok, false);
+  setAt(d, '/opportunity/affected_users/downgraded_from', undefined);
+  assertAccepted(validate(d));
+});
+
+test('model output keeps its original rejection, with its own code, at every claim', () => {
+  const model = validModelOutput();
+  const pointers = claimPointers(model);
+  assert.equal(pointers.length, 24);
+  for (const p of pointers) {
+    const d = validModelOutput();
+    setAt(d, `${p}/downgraded_from`, 'hypothesis');
+    const r = validateBlueprintModelOutput(d);
+    assertRejected(r, 'downgraded_from_forbidden', `${p}/downgraded_from`);
+    assert.ok(!errorsOf(r).some((e) => e.code === 'downgraded_from_not_allowed'));
+  }
+});
+
+test('the documented type still lists the optional field: only the Phase A2 validator narrows it', () => {
+  const contract = readFileSync(WORKED_EXAMPLE_DOC, 'utf8');
+  assert.ok(contract.includes('downgraded_from?: Basis;'));
+  assert.ok(contract.includes('BACKEND ONLY. Present when the verifier lowered the basis; the model must not write it.'));
+  const code = readFileSync(new URL('../contract.ts', import.meta.url), 'utf8');
+  assert.ok(code.includes('downgraded_from?: Basis;'));
 });

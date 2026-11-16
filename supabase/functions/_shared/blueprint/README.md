@@ -87,7 +87,7 @@ All live in `SAFEGUARDS` in `constants.ts`. Where a document gives a limit, the 
 9. `schema_version` being "the first key" is not enforced: key order in JSON is not semantic.
 10. **Verification record (Phase A2 policy).** The documented type allows `status: "verified_with_repairs"` and a non-empty `repairs`. Phase A2 is
     rejection-only, so the validator accepts only `status: "verified"` with `repairs: []`. This narrows the documented type on purpose; it is a policy,
-    not a documented rule. (An assembled claim may still carry `downgraded_from`, which the documents describe as backend-written; that is unchanged.)
+    not a documented rule. For the same reason `downgraded_from` is rejected too; see item 14.
 11. **Required checks.** Evidence contract section 5.1 says each step "names the `VerificationCheckName` it records", and the nine steps record all 13
     names with no condition. A stored blueprint must therefore carry each of the 13 exactly once with `passed: true`. The validator checks the stored
     record only: it does not run checks, adds none, and cannot confirm that the backend ran them (grounding needs the evidence pack).
@@ -96,6 +96,15 @@ All live in `SAFEGUARDS` in `constants.ts`. Where a document gives a limit, the 
     example only; the documents do not say they are mandatory, so they are optional.
 13. **Metric cluster.** Every `cluster_metric` must have `cluster_id` equal to `meta.cluster_id`. The documents do not state this equality literally; it
     follows from the documented design (a blueprint is requested for one `cluster_id` and M01-M16 are that cluster's `dr_clusters` values).
+14. **`downgraded_from` (Phase A2 policy, narrower than the documented contract).**
+    * *Literal contract:* `product-blueprint-v1.md` section 3.1 types `downgraded_from?: Basis` on a `Claim` as optional, "BACKEND ONLY. Present when the
+      verifier lowered the basis; the model must not write it." Evidence contract sections 5.2 and 7 record every downgrade as a `downgraded_basis`
+      repair, and its stored-claim example shows the field next to that repair. So the documents allow the field on a stored claim, always together with a repair.
+    * *Phase A2 policy:* the phase is rejection-only, nothing is downgraded or repaired, and the validator requires `verification.status === "verified"` with
+      `verification.repairs` empty. A claim carrying `downgraded_from` would contradict that record, so `validateProductBlueprint` rejects the field on any
+      claim, whatever its value, with `downgraded_from_not_allowed` at `<claim>/downgraded_from`. Nothing is stripped or repaired.
+    * *Unchanged:* `validateBlueprintModelOutput` still rejects it with `downgraded_from_forbidden`, and `contract.ts` keeps the documented optional field. A later
+      phase that implements repairs would relax this rule together with items 10 and 11.
 
 ## Checks that go beyond the literal wording of the documents
 

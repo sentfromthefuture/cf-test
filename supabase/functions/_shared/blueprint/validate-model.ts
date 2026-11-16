@@ -21,7 +21,12 @@ const SG = SAFEGUARDS;
 // Reusable shapes
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-/** Claim (section 3.1). `downgraded_from` is backend-only: forbidden in model output, a valid Basis in the assembled blueprint. */
+/**
+ * Claim (section 3.1). `downgraded_from` is backend-only metadata: the documents write it only when a verifier lowered a basis, and record every
+ * such downgrade as a `downgraded_basis` repair. It is rejected in model output (the model must not write it) and, as a Phase A2 policy, also in the
+ * assembled blueprint, because Phase A2 is rejection-only: nothing is ever downgraded or repaired, so a stored claim carrying it would contradict
+ * `verification.status === "verified"` and an empty `verification.repairs`. The documented type keeps the optional field (contract.ts).
+ */
 export function readClaim(c: Ctx, p: string, v: unknown): void {
   const o = readObject(c, p, v, ['text', 'basis', 'evidence_refs'], ['confidence', 'rationale', 'validation', 'missing_information', 'downgraded_from']);
   if (!o) return;
@@ -36,7 +41,7 @@ export function readClaim(c: Ctx, p: string, v: unknown): void {
   fStr(c, o, p, 'missing_information', CAP.companion);
   if (hasKey(o, 'downgraded_from')) {
     if (c.mode === 'model') c.err('downgraded_from_forbidden', at(p, 'downgraded_from'), 'Only the backend may record a downgrade; the model must not write this field.');
-    else fEnum(c, o, p, 'downgraded_from', BASIS);
+    else c.err('downgraded_from_not_allowed', at(p, 'downgraded_from'), 'Phase A2 is rejection-only and never downgrades a claim, so a stored claim must not carry downgrade metadata.');
   }
 }
 

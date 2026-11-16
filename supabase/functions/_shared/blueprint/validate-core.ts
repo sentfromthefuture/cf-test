@@ -13,7 +13,7 @@ export type ValidationErrorCode =
   // whole-input problems
   | 'input_too_large' | 'validator_internal_error'
   // shape (tiers T1-T4)
-  | 'invalid_type' | 'missing_required_field' | 'unexpected_key' | 'backend_owned_key_forbidden' | 'downgraded_from_forbidden'
+  | 'invalid_type' | 'missing_required_field' | 'unexpected_key' | 'backend_owned_key_forbidden' | 'downgraded_from_forbidden' | 'downgraded_from_not_allowed'
   | 'unsupported_schema_version' | 'invalid_enum' | 'invalid_literal' | 'invalid_format'
   | 'string_blank' | 'string_too_long' | 'string_invalid_characters'
   | 'list_too_short' | 'list_too_long' | 'duplicate_item' | 'number_out_of_range' | 'invalid_integer'

@@ -57,7 +57,7 @@ export interface Claim {
   validation?: string;
   /** unknown: what information is missing (max 300). */
   missing_information?: string;
-  /** BACKEND ONLY. Present when a verifier lowered the basis; rejected in model output. */
+  /** BACKEND ONLY. Present when the verifier lowered the basis; the model must not write it. Documented type kept as is; the Phase A2 validator rejects it in model output AND in the assembled blueprint (rejection-only policy, see README). */
   downgraded_from?: Basis;
 }
 

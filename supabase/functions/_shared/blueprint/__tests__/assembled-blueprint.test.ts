@@ -334,17 +334,12 @@ test('status, checks and repairs have fixed shapes (policy for status, repairs a
 // downgraded_from, sufficiency
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-test('downgraded_from is allowed on an assembled claim (the backend wrote it) and must be a real basis', () => {
-  const ok = bp();
-  setAt(ok, '/opportunity/affected_users/downgraded_from', 'verified_evidence');
-  assertAccepted(validate(ok));
-  const bad = bp();
-  setAt(bad, '/opportunity/affected_users/downgraded_from', 'made_up');
-  assertRejected(validate(bad), 'invalid_enum', '/opportunity/affected_users/downgraded_from');
-  // the very same claim written by the model is rejected
-  const model = bp();
-  setAt(model, '/opportunity/affected_users/downgraded_from', 'verified_evidence');
-  const { meta: _a, evidence_index: _b, verification: _c, ...modelOnly } = model;
+test('downgraded_from is rejected on an assembled claim too (Phase A2 policy; full coverage in verification-and-metadata.test.ts)', () => {
+  const d = bp();
+  setAt(d, '/opportunity/affected_users/downgraded_from', 'verified_evidence');
+  assertRejected(validate(d), 'downgraded_from_not_allowed', '/opportunity/affected_users/downgraded_from');
+  // the very same claim written in model output keeps its own, original error
+  const { meta: _a, evidence_index: _b, verification: _c, ...modelOnly } = d;
   void _a; void _b; void _c;
   assertRejected(validateBlueprintModelOutput(modelOnly), 'downgraded_from_forbidden', '/opportunity/affected_users/downgraded_from');
 });
