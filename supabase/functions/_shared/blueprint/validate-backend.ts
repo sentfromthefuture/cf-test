@@ -7,7 +7,8 @@
 import {
   ANALYSIS_METHOD, BASIS, CAP, EVIDENCE_EXCERPT_MAX_ID, EVIDENCE_METRIC_MAX_ID, EVIDENCE_SUFFICIENCY, FORMAT, GENERATION_MODE, BLUEPRINT_SCHEMA_VERSION,
   METRIC_CATALOGUE_NAMES, METRIC_CLASS, METRIC_NAME, PASS_NAME, REPAIR_ACTION, SAFEGUARDS, TEAM_SIZE, BUDGET_BAND, PREFERRED_STACK, BUSINESS_MODEL_HINT,
-  TARGET_REGION, VERIFICATION_CHECK_NAME, VERIFICATION_STATUS, WTP_MIN_EXCERPTS,
+  TARGET_REGION, VERIFICATION_CHECK_NAME, VERIFICATION_STATUS, WTP_MIN_EXCERPTS, ACCEPTED_VERIFICATION_STATUS, ESTIMATE_DISCLAIMER, FIXED_DISCLAIMERS,
+  REQUIRED_VERIFICATION_CHECKS,
 } from './constants.ts';
 import type { Range } from './constants.ts';
 import type { Basis, ProductBlueprintV1 } from './contract.ts';
@@ -125,7 +126,16 @@ function readMeta(c: Ctx, p: string, v: unknown): void {
     fEnum(c, ep, q, 'sufficiency', EVIDENCE_SUFFICIENCY);
     if (hasKey(ep, 'sufficiency_reasons')) readList(c, at(q, 'sufficiency_reasons'), ep.sufficiency_reasons, SG.backendList, (item, ip) => bText(c, ip, item, SG.backendShortText));
   }
-  if (hasKey(o, 'disclaimers')) readList(c, at(p, 'disclaimers'), o.disclaimers, SG.backendList, (item, ip) => bText(c, ip, item, CAP.default));
+  if (hasKey(o, 'disclaimers')) {
+    // Fixed backend text: an entry must be one of the documented disclaimers, exactly, and may not repeat. Arbitrary text is rejected.
+    const seen = new Set<string>();
+    readList(c, at(p, 'disclaimers'), o.disclaimers, SG.backendList, (item, ip) => {
+      if (typeof item !== 'string') { c.err('invalid_type', ip, 'Expected a string.'); return; }
+      if (!FIXED_DISCLAIMERS.includes(item)) { c.err('disclaimer_not_allowed', ip, 'Disclaimers are fixed backend text; this entry is not one of the documented disclaimers.'); return; }
+      if (seen.has(item)) c.err('duplicate_item', ip, 'The list repeats an entry.');
+      seen.add(item);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -245,6 +255,27 @@ export function readBackendStructure(c: Ctx, root: Rec): void {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 export function checkAssembled(c: Ctx, bp: ProductBlueprintV1): void {
+  // Phase A2 is rejection-only: a stored blueprint is "verified", records no repairs, and carries every documented check, each passed.
+  if (bp.verification.status !== ACCEPTED_VERIFICATION_STATUS) {
+    c.err('verification_status_not_allowed', '/verification/status', 'In Phase A2 a stored blueprint must have verification status "verified"; "verified_with_repairs" is not accepted.');
+  }
+  if (bp.verification.repairs.length > 0) {
+    c.err('verification_repairs_not_allowed', '/verification/repairs', 'Repairs are not accepted in Phase A2: invalid output is rejected, never repaired.');
+  }
+  const checkCount = new Map<string, number>();
+  bp.verification.checks.forEach((k, i) => {
+    checkCount.set(k.check, (checkCount.get(k.check) ?? 0) + 1);
+    if (!k.passed) c.err('verification_check_failed', `/verification/checks/${i}/passed`, 'A stored blueprint cannot contain a failed verification check.');
+  });
+  for (const required of REQUIRED_VERIFICATION_CHECKS) {
+    if (!checkCount.has(required)) c.err('verification_check_missing', '/verification/checks', `The required verification check "${required}" is missing.`);
+  }
+
+  // Disclaimers are fixed text (each entry was matched against the documented wording); the estimate label is required.
+  if (!bp.meta.disclaimers.includes(ESTIMATE_DISCLAIMER)) {
+    c.err('disclaimer_missing', '/meta/disclaimers', 'The documented estimate disclaimer is required in the blueprint metadata.');
+  }
+
   // generation_mode and the pass records tell the same story (section 7 "Reading the example").
   const names = bp.meta.passes.map((p) => p.pass);
   const distinct = new Set(names);
@@ -262,6 +293,12 @@ export function checkAssembled(c: Ctx, bp: ProductBlueprintV1): void {
     if (e.kind === 'cluster_metric' && e.id[0] === 'M') {
       const expected = METRIC_CATALOGUE_NAMES[Number(e.id.slice(1)) - 1];
       if (expected !== undefined && e.name !== expected) c.err('evidence_index_mismatch', `/evidence_index/${i}/name`, 'This metric id has a fixed meaning in the catalogue and the name does not match it.');
+    }
+  });
+  // Every cluster metric belongs to the cluster this blueprint was generated for.
+  bp.evidence_index.forEach((e, i) => {
+    if (e.kind === 'cluster_metric' && e.cluster_id !== bp.meta.cluster_id) {
+      c.err('evidence_index_mismatch', `/evidence_index/${i}/cluster_id`, 'A cluster metric must belong to the cluster named in meta.cluster_id.');
     }
   });
   const excerptEntries = bp.evidence_index.filter((e) => e.kind === 'discussion_excerpt').length;

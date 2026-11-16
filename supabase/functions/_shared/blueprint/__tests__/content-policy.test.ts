@@ -126,10 +126,9 @@ test('URLs are allowed in the backend-owned evidence index (they come from the d
   assertRejected(validateProductBlueprint(bad), 'contains_url', '/opportunity/title');
 });
 
-test('the backend-owned excerpt text and disclaimers are not scanned as model text', () => {
+test('the backend-owned excerpt text is not scanned as model text', () => {
   const bp = validBlueprint();
   setAt(bp, '/evidence_index/0/excerpt', 'A maintainer wrote: just run `DROP TABLE x` and see https://example.invalid/post');
-  setAt(bp, '/meta/disclaimers/0', 'Estimates only. See https://example.invalid/terms');
   assertAccepted(validateProductBlueprint(bp));
 });
 

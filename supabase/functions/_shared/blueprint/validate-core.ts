@@ -27,6 +27,8 @@ export type ValidationErrorCode =
   | 'verified_claim_unsupported' | 'wtp_rule_violation' | 'market_sizing_rule_violation' | 'verdict_not_allowed_for_sufficiency'
   // backend-owned parts of the assembled blueprint
   | 'evidence_index_mismatch' | 'verification_mismatch' | 'meta_inconsistent'
+  | 'verification_status_not_allowed' | 'verification_repairs_not_allowed' | 'verification_check_missing' | 'verification_check_failed'
+  | 'disclaimer_not_allowed' | 'disclaimer_missing'
   // content policy (tier T7)
   | 'contains_url' | 'contains_sql' | 'contains_executable';
 

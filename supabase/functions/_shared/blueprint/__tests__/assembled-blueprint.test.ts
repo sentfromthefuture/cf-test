@@ -316,19 +316,17 @@ test('unresolved_refs is the number 0 on a stored blueprint', () => {
   assertRejected(validate(str), 'invalid_type', '/verification/unresolved_refs');
 });
 
-test('status, checks and repairs have fixed shapes', () => {
+test('status, checks and repairs have fixed shapes (policy for status, repairs and required checks is in verification-and-metadata.test.ts)', () => {
   const at = (p: string, v: unknown) => { const d = bp(); setAt(d, p, v); return validate(d); };
   assertRejected(at('/verification/status', 'rejected'), 'invalid_enum', '/verification/status');
-  assertAccepted(at('/verification/status', 'verified_with_repairs'));
   assertRejected(at('/verification/checks/0/check', 'made_up_check'), 'invalid_enum', '/verification/checks/0/check');
   assertRejected(at('/verification/checks/1/check', 'json_parse'), 'duplicate_item', '/verification/checks/1/check');
   assertAccepted(at('/verification/checks/0/detail', 'All good'));
   assertRejected(at('/verification/checks/0/passed', 'yes'), 'invalid_type', '/verification/checks/0/passed');
   const repair = { path: '/opportunity/thesis/0/basis', action: 'downgraded_basis', reason: 'No supporting-grade item' };
-  assertAccepted(at('/verification/repairs', [repair]));
+  // a repair record is still checked for shape first; whether any repair is acceptable is a separate policy rule
   assertRejected(at('/verification/repairs', [{ ...repair, action: 'rewrote_everything' }]), 'invalid_enum', '/verification/repairs/0/action');
   assertRejected(at('/verification/repairs', [{ ...repair, path: 'not-a-pointer' }]), 'invalid_format', '/verification/repairs/0/path');
-  assertAccepted(at('/verification/repairs', [{ ...repair, path: '' }]));
   assertRejected(at('/verification/repairs', [{ path: '/x', action: 'dropped_ref' }]), 'missing_required_field', '/verification/repairs/0/reason');
 });
 

@@ -85,12 +85,34 @@ All live in `SAFEGUARDS` in `constants.ts`. Where a document gives a limit, the 
 7. `generation_mode` and `meta.passes` must agree: `single_pass` has one record named `single`; `sectioned` has `A`, `B`, `C` once each.
 8. `estimated_build_weeks` may be fractional (the documents say `number`).
 9. `schema_version` being "the first key" is not enforced: key order in JSON is not semantic.
+10. **Verification record (Phase A2 policy).** The documented type allows `status: "verified_with_repairs"` and a non-empty `repairs`. Phase A2 is
+    rejection-only, so the validator accepts only `status: "verified"` with `repairs: []`. This narrows the documented type on purpose; it is a policy,
+    not a documented rule. (An assembled claim may still carry `downgraded_from`, which the documents describe as backend-written; that is unchanged.)
+11. **Required checks.** Evidence contract section 5.1 says each step "names the `VerificationCheckName` it records", and the nine steps record all 13
+    names with no condition. A stored blueprint must therefore carry each of the 13 exactly once with `passed: true`. The validator checks the stored
+    record only: it does not run checks, adds none, and cannot confirm that the backend ran them (grounding needs the evidence pack).
+12. **Disclaimers.** `meta.disclaimers` is "fixed backend text". Every entry must equal one of the three strings in `FIXED_DISCLAIMERS` (the wording in the
+    section 7 example), without repeats, and the section 8 estimate label (`ESTIMATE_DISCLAIMER`) must be present. The other two strings are fixed by the
+    example only; the documents do not say they are mandatory, so they are optional.
+13. **Metric cluster.** Every `cluster_metric` must have `cluster_id` equal to `meta.cluster_id`. The documents do not state this equality literally; it
+    follows from the documented design (a blueprint is requested for one `cluster_id` and M01-M16 are that cluster's `dr_clusters` values).
+
+## Checks that go beyond the literal wording of the documents
+
+These were added as integrity safeguards; each is a one-line change if a reviewer disagrees:
+foreign-key `references_columns` must have as many entries as `columns` (rule 9 only says they "exist in that table"); index names are unique across the
+design and constraint and policy names are unique within a table; foreign-key coverage ignores partial indexes and counts only btree (or single-column hash)
+indexes; a repeated entry in any id list is rejected.
 
 ## Documented but not enforced here
 
-Grounding guards (names, numbers, generalising words), disclaimer text, `verification.status` versus `repairs`, whether every check ran and passed,
-any rule for `insufficient` sufficiency (the documents define none), type compatibility between foreign-key and referenced columns, that a
-referenced column is a primary key or unique, `set null` needing a nullable column, `MetricEvidence.cluster_id` equalling `meta.cluster_id`.
+Grounding guards (names, numbers, generalising words), any rule for `insufficient` sufficiency (the documents define none), and the following database
+rules, which the approved documents do **not** state and which were therefore not invented:
+* a foreign key's `references_columns` must be a primary key or a unique key of the referenced table (rule 9 requires only that the columns exist);
+* `on_delete: "set null"` requires the foreign-key columns to be nullable (no document says so; the worked example happens to satisfy it).
+
+Both are real PostgreSQL requirements and good candidates for a documentation amendment. Two tests marked `KNOWN GAP` pin the current behaviour so a future
+decision is deliberate. Type compatibility between foreign-key and referenced columns is likewise not enforced.
 
 ## Worked example
 

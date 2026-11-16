@@ -119,6 +119,30 @@ export const REPAIR_ACTION = ['downgraded_basis', 'dropped_ref', 'truncated_text
 export const VERIFICATION_STATUS = ['verified', 'verified_with_repairs'] as const;
 
 /**
+ * Phase A2 is rejection-only (no repair behaviour exists), so the only status a stored blueprint may carry is 'verified' and `repairs` must be
+ * empty. This is a Phase A2 POLICY that narrows the documented type, which still lists 'verified_with_repairs' (product-blueprint-v1.md section 3.9).
+ */
+export const ACCEPTED_VERIFICATION_STATUS = 'verified' as const;
+
+/**
+ * Evidence contract section 5.1: "Each step names the VerificationCheckName it records". The nine steps record these 13 names, none of them is
+ * conditional, and a rejected output is never stored, so a stored blueprint must carry every one exactly once with passed: true.
+ * The validator checks the stored RECORD. It does not run the checks and cannot confirm that the backend ran them (grounding needs the evidence pack).
+ */
+export const REQUIRED_VERIFICATION_CHECKS: readonly (typeof VERIFICATION_CHECK_NAME)[number][] = VERIFICATION_CHECK_NAME;
+
+/**
+ * `meta.disclaimers` is "fixed backend text" (product-blueprint-v1.md section 3.9). The wording is given in the section 7 worked example, and
+ * section 8 states the estimate label as the EXACT text. Arbitrary text is not accepted as backend-owned metadata: every entry must be one of these.
+ */
+export const ESTIMATE_DISCLAIMER = 'AI-generated estimate — not a delivery commitment';
+export const FIXED_DISCLAIMERS: readonly string[] = [
+  'AI-generated design proposal. Items marked hypothesis or ai_recommendation are not validated facts.',
+  'Evidence excerpts are third-party content shown with source, licence and attribution.',
+  ESTIMATE_DISCLAIMER,
+];
+
+/**
  * Evidence contract section 3.2: fixed metric catalogue. M01..M10 each have one name; M11..M16 are the six score components.
  * Index 0 is M01.
  */
