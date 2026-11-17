@@ -70,6 +70,27 @@ export const ROUNDING = {
   scoreComponentStep: 5,   // M11-M16: nearest 5
 } as const;
 
+/**
+ * Numeric domains of the cluster values that are rounded (review finding: out-of-range and extreme finite values must be rejected with a
+ * specific error, never reach the rounding and never become a generic internal error).
+ *  - severity_avg: DOCUMENTED. dr_problem_signals.severity is `smallint check (severity between 1 and 5)` and severity_avg is its mean (1 to 5).
+ *  - score components: DOCUMENTED. dr_refresh_clusters clamps every component to 0-100 (`least(100, ...)`, `greatest(0, ...)`).
+ *  - growth_rate (percent): CHOICE. The contract gives no range, so this is a safety bound only: far above anything the formula
+ *    `(recent - prior) / greatest(prior, 1) * 100` can produce, and far below the point where rounding could overflow. The formula implies a
+ *    floor of -100, which is deliberately NOT enforced here because the documents do not state it as a rule.
+ */
+export const VALUE_RANGES = {
+  severityAvg: { min: 1, max: 5 },
+  scoreComponent: { min: 0, max: 100 },
+  growthRatePct: { min: -1e12, max: 1e12 },
+} as const;
+
+/**
+ * Largest magnitude `roundToStep` accepts. Below 2^53 / 10, so dividing by the step and multiplying back is exact enough and can never
+ * overflow to Infinity. Every validated input is far inside it.
+ */
+export const ROUND_MAX_ABS = 1e15;
+
 /** DOCUMENTED (section 3.2): M07 and M08 are rendered as these bucket labels. */
 export const COUNT_BUCKETS = ['0', '1-2', '3-5', '6-10', '11+'] as const;
 export type CountBucket = (typeof COUNT_BUCKETS)[number];
@@ -166,7 +187,21 @@ export const RELEVANCE_STOP_WORDS: ReadonlySet<string> = new Set([
 export const GENERALISATION_WORDS = ['many', 'most', 'several', 'often', 'commonly', 'repeatedly', 'everyone', 'always', 'never', 'all'] as const;
 export const GENERALISATION_MIN_SUPPORTING_ITEMS = 2;
 
-/** DOCUMENTED (section 5.3 item 2 and section 6): willingness-to-pay text may not state a price, budget or share. See evidence-grounding.ts for the limits of detecting that. */
+/**
+ * DOCUMENTED (section 6): willingness-to-pay text "may not state a price, a budget, a conversion rate or a share of users". The word lists
+ * below feed the lexical detector in evidence-grounding.ts; see the limits documented there.
+ */
 export const CURRENCY_SYMBOLS = '$€£¥₹₦₩₽₺฿₴₫₵₲₪₡';
 export const CURRENCY_CODES = ['USD', 'EUR', 'GBP', 'ZMW', 'ZMK', 'KES', 'NGN', 'ZAR', 'INR', 'JPY', 'CNY', 'AUD', 'CAD', 'CHF', 'BWP', 'TZS', 'UGX', 'GHS'] as const;
 export const CURRENCY_WORDS = ['dollar', 'dollars', 'euro', 'euros', 'pound', 'pounds', 'kwacha', 'cent', 'cents', 'buck', 'bucks', 'rand', 'shilling', 'shillings', 'naira'] as const;
+/** Number words, so "fifty dollars" and "one in five" are seen as well as "50 dollars" and "1 in 5". */
+export const NUMBER_WORDS = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
+  'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety',
+  'hundred', 'thousand', 'million', 'dozen', 'couple', 'few',
+] as const;
+/** Groups of people a share can be stated about ("most users", "all of the teams"). "some" and "several" are deliberately absent: "some authors said they would pay" is the one thing the text may say. */
+export const POPULATION_NOUNS = [
+  'authors', 'users', 'people', 'teams', 'customers', 'respondents', 'developers', 'maintainers', 'businesses', 'companies', 'commenters',
+  'posters', 'owners', 'managers', 'participants', 'discussions', 'posts', 'founders', 'engineers', 'readers', 'buyers',
+] as const;

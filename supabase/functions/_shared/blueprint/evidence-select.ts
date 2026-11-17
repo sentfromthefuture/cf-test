@@ -11,6 +11,16 @@
 //   6. ids E01.. by (source_id, published_at asc nulls last, hash)    -> assignExcerptIds
 //
 // Where the contract is silent this module chooses, and says so (marked CHOICE). Each CHOICE is also listed in the PR report.
+//
+// WILLINGNESS-TO-PAY PICK POLICY (the contract says "up to 4 WTP candidates first" and gives no order for choosing 4 of more than 4).
+// This module's policy, applied to the discussion-level candidates left after the collapse, is:
+//   1. Global, not per source: the WTP pass ignores source_id (source diversity applies only to the fill pass that follows).
+//   2. Order: more engagement first; then more recent published_at first (a missing date counts as least recent); then smaller content_hash;
+//      then smaller record id. The order is total, so the same four are chosen from any permutation of the input.
+//   3. A WTP candidate that does not make the four is NOT discarded: it competes in the fill pass like any other candidate.
+//   4. The collapse happens first, so a discussion's WTP flag is that of the record kept for it (highest engagement), not of any sibling.
+// This policy is covered by tests (permutations, ties, global ordering). Changing it changes which excerpts the model sees and therefore the
+// cache identity; it needs a config-version bump (reliability document section 9).
 import { MAX_EXCERPTS, MAX_WTP_FIRST, excerptId } from './evidence-constants.ts';
 import type { ValidMember } from './evidence-input.ts';
 import { compareStrings } from './evidence-text.ts';

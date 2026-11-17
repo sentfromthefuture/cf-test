@@ -6,9 +6,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildGroundingContext, checkGeneralisation, checkNameGrounding, checkNumericGrounding, checkRelevanceFloor, checkSupportingGrade,
-  checkWtpEvidence, containsGeneralisation, contentStems, extractNumerals, isSupportingGrade, normaliseForMatch, renderMetricValue, statesPriceOrShare,
+  checkWtpEvidence, containsGeneralisation, contentStems, extractNumerals, findPriceOrShareStatements, isSupportingGrade, normaliseForMatch,
+  renderMetricValue, statesPriceOrShare,
 } from '../evidence.ts';
-import type { ClusterInput, GroundingContext } from '../evidence.ts';
+import type { ClusterInput, GroundingContext, PriceOrShareKind } from '../evidence.ts';
 import { groundedCompetitors } from '../../collector/heuristics.ts';
 import { input, member, prepared } from './evidence-fixtures.ts';
 
@@ -353,8 +354,125 @@ test('WTP: the price rule stands on its own - an excerpt can contain a price, th
     { passed: false, reason: 'wtp_text_states_figure', flagged_excerpts: 2 });
 });
 
-test('WTP LIMIT: a price or share written in words is not detected', () => {
-  assert.equal(statesPriceOrShare('Half of the authors said they would pay a few hundred.'), false);
+const kindsOf = (text: string): PriceOrShareKind[] => findPriceOrShareStatements(text);
+
+test('WTP: a BUDGET statement is refused, numeric or not (section 6: "may not state ... a budget")', () => {
+  for (const text of [
+    'Some authors have budget for this.', 'One author said budget is already approved.', 'It was budgeted for next quarter.', 'They are budgeting for tools like this.',
+    'A budget of 500 was mentioned.', 'Budget: 2000.', 'Some authors mentioned their budgets.', 'The budgetary owner agreed.', 'Authors said they would pay if it fits the BUDGET.',
+  ]) {
+    assert.deepEqual(kindsOf(text), ['budget'], text);
+    assert.deepEqual(evidenced(['E01', 'E02'], { text }), { passed: false, reason: 'wtp_text_states_figure', flagged_excerpts: 2 }, text);
+  }
+});
+
+test('WTP: a CONVERSION-RATE statement is refused, numeric or not (section 6: "may not state ... a conversion rate")', () => {
+  for (const text of [
+    'Authors suggested a high conversion rate.', 'Conversion would be strong.', 'Some said conversions improved.', 'Authors said users convert to paid quickly.',
+    'They convert into paying customers.', 'A trial-to-paid path was described.', 'Free to paid works well.', 'Freemium to premium was mentioned.',
+    'The signup rate is high.', 'Their sign-up rate was good.', 'The upgrade rate looked strong.', 'The close rate improved.', 'Conversion of 3 was reported.',
+  ]) {
+    assert.ok(kindsOf(text).includes('conversion'), `${text} -> ${JSON.stringify(kindsOf(text))}`);
+    assert.equal(statesPriceOrShare(text), true, text);
+    assert.equal(evidenced(['E01', 'E02'], { text }).reason, 'wtp_text_states_figure', text);
+  }
+});
+
+test('WTP: a SHARE of users is refused in numeric forms (ratios, fractions) and in words (halves, majority, "most users")', () => {
+  for (const text of [
+    'About 2 in 10 would pay.', '3 out of 5 would pay.', '1 of every 4 said yes.', '1/3 of them said so.', 'One in five said they would pay.',
+    'Two out of three agreed.', 'Three of every ten said so.', 'Half of the authors would pay.', 'A third of users would pay.', 'Two thirds of teams agreed.',
+    'A quarter of respondents said yes.', 'Half the authors agreed.', 'The majority would pay.', 'A minority said they would not.', 'Most users would pay.',
+    'Nearly all teams agreed.', 'All of the authors said they would pay.', 'Almost all developers agreed.', 'A large share of users would pay.',
+    'Some portion of customers agreed.', 'The proportion of buyers is high.',
+  ]) {
+    assert.ok(kindsOf(text).includes('share'), `${text} -> ${JSON.stringify(kindsOf(text))}`);
+    assert.equal(evidenced(['E01', 'E02'], { text }).reason, 'wtp_text_states_figure', text);
+  }
+});
+
+test('WTP: a PRICE is refused as a currency amount (digits or words), a billing rate, or the word price/pricing/fee', () => {
+  const cases: [string, PriceOrShareKind][] = [
+    ['They would pay $20.', 'currency'], ['About 5 dollars.', 'currency'], ['Maybe fifty dollars.', 'currency'], ['A few bucks a month.', 'currency'],
+    ['Roughly two kwacha.', 'currency'], ['ZMW 150 per seat.', 'currency'], ['20 USD', 'currency'],
+    ['10/month would work.', 'billing_rate'], ['5 per seat.', 'billing_rate'], ['3 per user', 'billing_rate'], ['A monthly fee was mentioned.', 'billing_rate'],
+    ['An annual subscription cost came up.', 'billing_rate'],
+    ['Some authors said the price was fine.', 'price_word'], ['Pricing was discussed.', 'price_word'], ['At a reasonable price.', 'price_word'], ['No fees.', 'price_word'],
+    ['Sixty percent would pay.', 'percentage'], ['60% said so.', 'percentage'], ['a percentage of authors', 'percentage'],
+  ];
+  for (const [text, kind] of cases) {
+    assert.ok(kindsOf(text).includes(kind), `${text} -> ${JSON.stringify(kindsOf(text))}`);
+    assert.equal(statesPriceOrShare(text), true, text);
+  }
+});
+
+test('WTP: findPriceOrShareStatements names the families found, in a fixed order, and never the words', () => {
+  assert.deepEqual(kindsOf('Some authors would pay.'), []);
+  assert.deepEqual(kindsOf('Most users would pay $20 per month within budget at a good conversion rate (60%).'), ['currency', 'percentage', 'billing_rate', 'budget', 'conversion', 'share']);
+  assert.deepEqual(kindsOf('Conversion and budget'), ['budget', 'conversion']);
+  for (const kind of kindsOf('Most users would pay $20 per month within budget at a good conversion rate (60%).')) assert.ok(!/\d|\$/.test(kind));
+});
+
+test('WTP: wording the rule must NOT refuse - "some authors said they would pay" and ordinary neighbours still pass', () => {
+  for (const text of [
+    WTP_TEXT, 'Some authors said they would pay.', 'Two authors said they would pay for it.', 'Several authors said they would pay.',
+    'One maintainer said they would happily pay for this.', 'Authors in two separate discussions said they would pay.', 'Some teams said they would pay for an integration.',
+    'A third-party tool was mentioned.', 'Version 2.0 shipped in 2026 for 5 users.', 'They said it was worth paying for.', 'It is the most important issue.',
+    'Authors in separate discussions asked for a paid option.', 'Willing to pay was stated by some authors.', 'They talked about a half-baked workaround.',
+  ]) {
+    assert.deepEqual(kindsOf(text), [], text);
+    assert.equal(evidenced(['E01', 'E02'], { text }).passed, true, text);
+  }
+});
+
+test('WTP: detection is case-insensitive and sees through full-width characters', () => {
+  assert.equal(statesPriceOrShare('THE MAJORITY WOULD PAY'), true);
+  assert.equal(statesPriceOrShare('Budget approved'), true);
+  assert.equal(statesPriceOrShare('６０％ would pay'), true);
+  assert.equal(statesPriceOrShare('ｂｕｄｇｅｔ approved'), true);
+  assert.equal(statesPriceOrShare('Ｓｏｍｅ ａｕｔｈｏｒｓ said they would pay'), false);
+});
+
+test('WTP: the extended detector does not loosen the evidenced rule - two distinct flagged excerpts and a verified basis are still required first', () => {
+  const clean = 'Some authors said they would pay for this.';
+  assert.deepEqual(evidenced(['E01', 'E02'], { text: clean }), { passed: true, reason: 'ok', flagged_excerpts: 2 });
+  // Not enough excerpts is reported before the wording check, whatever the text says.
+  assert.deepEqual(evidenced(['E01'], { text: 'Most users have budget.' }), { passed: false, reason: 'wtp_needs_two_flagged_excerpts', flagged_excerpts: 1 });
+  assert.deepEqual(evidenced(['E01', 'E01'], { text: 'Most users have budget.' }), { passed: false, reason: 'wtp_needs_two_flagged_excerpts', flagged_excerpts: 1 });
+  assert.deepEqual(evidenced(['E01', 'E03'], { text: clean }), { passed: false, reason: 'wtp_needs_two_flagged_excerpts', flagged_excerpts: 1 });
+  // A non-verified basis is reported before anything else.
+  assert.deepEqual(evidenced(['E01', 'E02'], { basis: 'hypothesis', text: 'Most users have budget.' }), { passed: false, reason: 'wtp_basis_not_verified', flagged_excerpts: 2 });
+  // Other statuses: the rule does not apply, whatever the wording.
+  assert.deepEqual(evidenced(['E01'], { status: 'not_evidenced', basis: 'unknown', text: 'Most users have budget.' }), { passed: true, reason: 'not_applicable', flagged_excerpts: 1 });
+  // And all three conditions together.
+  assert.deepEqual(evidenced(['E01', 'E02'], { text: 'Most users have budget.' }), { passed: false, reason: 'wtp_text_states_figure', flagged_excerpts: 2 });
+});
+
+test('WTP LIMITS: what lexical detection still does not see (pinned so nobody reads a pass as proof)', () => {
+  for (const text of [
+    'Authors said they would pay a few hundred a month.',      // an amount in words with no currency word
+    'They said it was cheap and they would pay.',              // vague price level
+    'Some authors called it expensive but worth paying for.',  // vague price level
+    'They would pay for a premium tier.',                       // a plan, not a figure
+    'They would pay per seat.',                                 // a pricing model without a figure
+    'A good chunk of authors said they would pay.',            // a share in an unlisted phrasing
+    'Plenty of authors said they would pay.',                  // a share in an unlisted phrasing
+    'Algunos autores dijeron que pagarian el sesenta por ciento.', // another language
+  ]) {
+    assert.equal(statesPriceOrShare(text), false, text);
+  }
+});
+
+test('WTP: ratios in number words and digits are caught, including "out of every"', () => {
+  for (const text of ['Roughly sixty out of every hundred did.', 'About 3 out of every 10 said so.', 'Nine in ten agreed.', 'One of every four paid.']) {
+    assert.ok(kindsOf(text).includes('share'), text);
+  }
+});
+
+test('WTP: fails closed - harmless mentions of the listed words are also refused (this only costs an "evidenced" status)', () => {
+  for (const text of ['A third-party fee schedule was unclear.', 'Authors asked about the pricing page.', 'One author works in budgeting software.', 'Some said all of the users liked it.']) {
+    assert.equal(statesPriceOrShare(text), true, text);
+  }
 });
 
 test('WTP: an unissued id cannot be counted as a flagged excerpt', () => {

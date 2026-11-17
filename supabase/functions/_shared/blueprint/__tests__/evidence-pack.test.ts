@@ -120,6 +120,19 @@ test('worked example round trip: the documented evidence entries are reproduced 
   assert.deepEqual(docExcerpts.map((e) => idByRecord[e.record_id]), ['E01', 'E04', 'E02', 'E05', 'E03']);
 });
 
+test('dates at the edge of the supported years are accepted when they stay inside 0000-9999 in UTC, and the index entry stays valid for A2', () => {
+  const p = prepared(input([
+    member({ n: 1, published: '0000-01-01T00:00:00Z' }),
+    member({ n: 2, published: '9999-12-31T23:59:59Z' }),
+    member({ n: 3, published: '0001-01-01T00:00:00+14:00' }),   // 0000-12-31T10:00:00Z in UTC: still year 0
+    member({ n: 4, published: '9999-12-31T00:00:00-14:00' }),   // 9999-12-31T14:00:00Z in UTC
+  ]));
+  const e = p.index.filter((x) => x.kind === 'discussion_excerpt').map((x) => (x as { published_at: string }).published_at);
+  assert.deepEqual(e, ['0000-01-01T00:00:00Z', '0000-12-31T10:00:00Z', '9999-12-31T14:00:00Z', '9999-12-31T23:59:59Z']);
+  assert.deepEqual(p.pack.excerpts.map((x) => x.published), ['0000-01', '0000-12', '9999-12', '9999-12']);
+  assert.deepEqual(a2IndexErrors(p.index), []);
+});
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Privacy boundary of the model-facing pack
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -319,6 +332,15 @@ const MALFORMED: [string, (i: { cluster: Record<string, unknown>; members: { rec
   ['component not an object', (i) => { i.cluster.scores = { components: { problemFrequency: 5 } }; }, 'invalid_type', '/cluster/scores/components/problemFrequency'],
   ['component with an unknown basis', (i) => { i.cluster.scores = { components: { demandGrowth: { value: 1, basis: 'guess' } } }; }, 'invalid_enum', '/cluster/scores/components/demandGrowth/basis'],
   ['component value as text', (i) => { i.cluster.scores = { components: { demandGrowth: { value: '1', basis: 'measured' } } }; }, 'invalid_type', '/cluster/scores/components/demandGrowth/value'],
+  ['severity below the documented 1-5 range', (i) => { i.cluster.severity_avg = 0; }, 'number_out_of_range', '/cluster/severity_avg'],
+  ['severity above the documented 1-5 range', (i) => { i.cluster.severity_avg = 5.01; }, 'number_out_of_range', '/cluster/severity_avg'],
+  ['extreme finite severity', (i) => { i.cluster.severity_avg = Number.MAX_VALUE; }, 'number_out_of_range', '/cluster/severity_avg'],
+  ['score component below 0', (i) => { i.cluster.scores = { components: { painIntensity: { value: -1, basis: 'measured' } } }; }, 'number_out_of_range', '/cluster/scores/components/painIntensity/value'],
+  ['score component above 100', (i) => { i.cluster.scores = { components: { painIntensity: { value: 101, basis: 'measured' } } }; }, 'number_out_of_range', '/cluster/scores/components/painIntensity/value'],
+  ['extreme finite score component', (i) => { i.cluster.scores = { components: { competitionGap: { value: Number.MAX_VALUE, basis: 'derived' } } }; }, 'number_out_of_range', '/cluster/scores/components/competitionGap/value'],
+  ['extreme finite growth rate', (i) => { i.cluster.growth_rate = -Number.MAX_VALUE; }, 'number_out_of_range', '/cluster/growth_rate'],
+  ['date that is year -1 in UTC', (i) => { i.members[0].record.published_at = '0000-01-01T00:00:00+05:00'; }, 'invalid_format', '/members/0/record/published_at'],
+  ['date that is year 10000 in UTC', (i) => { i.members[0].record.published_at = '9999-12-31T23:59:59-05:00'; }, 'invalid_format', '/members/0/record/published_at'],
   ['member not an object', (i) => { (i.members as unknown[])[0] = 'row'; }, 'invalid_type', '/members/0'],
   ['member without a record', (i) => { delete (i.members[0] as Record<string, unknown>).record; }, 'missing_required_field', '/members/0/record'],
   ['member without a signal key', (i) => { delete (i.members[0] as Record<string, unknown>).signal; }, 'missing_required_field', '/members/0/signal'],

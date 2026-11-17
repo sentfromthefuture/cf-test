@@ -9,7 +9,7 @@
 // evidence-grounding.ts from the class stored here.
 import type { MetricClass, MetricEvidence } from './contract.ts';
 import {
-  COMPONENT_BASIS_TO_CLASS, COUNT_BUCKETS, METRIC_LABELS, METRIC_NAMES, METRIC_VALUE_MAX_ITEMS, ROUNDING, SCORE_COMPONENT_KEYS, metricId,
+  COMPONENT_BASIS_TO_CLASS, COUNT_BUCKETS, METRIC_LABELS, METRIC_NAMES, METRIC_VALUE_MAX_ITEMS, ROUNDING, ROUND_MAX_ABS, SCORE_COMPONENT_KEYS, metricId,
 } from './evidence-constants.ts';
 import type { CountBucket } from './evidence-constants.ts';
 import type { ValidCluster } from './evidence-input.ts';
@@ -20,8 +20,14 @@ import type { PackMetric } from './evidence-types.ts';
  * Rounds to the nearest multiple of `step`. A value exactly halfway rounds AWAY FROM ZERO (2.5 with step 5 gives 5; -2.5 gives -5).
  * CHOICE: the documents say "nearest" without a tie rule. Rounding the magnitude keeps positive and negative growth symmetrical.
  * Negative zero is normalised to 0 so a value never renders as "-0".
+ *
+ * Domain: finite and at most ROUND_MAX_ABS (1e15) in magnitude. Outside it the function throws RangeError instead of returning Infinity or a
+ * value that is not a multiple of the step (for example 1e308 / 0.5 overflows). The input validator keeps every real input far inside
+ * the domain, so this is a second line of defence, not the way bad data is reported.
  */
 export function roundToStep(x: number, step: number): number {
+  if (!Number.isFinite(x) || Math.abs(x) > ROUND_MAX_ABS) throw new RangeError('roundToStep: value outside the supported range');
+  if (!Number.isFinite(step) || step <= 0) throw new RangeError('roundToStep: step must be positive');
   const out = Math.sign(x) * Math.round(Math.abs(x) / step) * step;
   return out === 0 ? 0 : out;
 }

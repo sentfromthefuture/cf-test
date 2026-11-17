@@ -3,6 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cluster, hex, input, manyMembers, member, prepared, rid, selectedNs, shuffled } from './evidence-fixtures.ts';
 import { deepFreeze } from './helpers.ts';
+import { readInput } from '../evidence-input.ts';
+import { selectExcerpts } from '../evidence-select.ts';
 import type { ClusterMemberInput } from '../evidence.ts';
 
 /** A mixed population: four sources, ties on engagement and hash, missing dates, shared discussions and willingness-to-pay flags. */
@@ -447,6 +449,98 @@ test('records are ordered by instant, not by the text of the timestamp (differen
     member({ n: 2, published: '2026-04-01T10:00:00+05:00' }),
   ]));
   assert.deepEqual(selectedNs(p), [2, 1]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Review round 1: the WTP pick policy is documented and order-independent; engagement does not depend on key order
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/** The numeric part of the record ids chosen in the WTP first pass, read from the selection itself. */
+function wtpPassNs(members: ClusterMemberInput[]): number[] {
+  const read = readInput(input(members));
+  assert.equal(read.ok, true);
+  if (!read.ok) return [];
+  return selectExcerpts(read.members).selected.filter((x) => x.from_wtp_pass).map((x) => Number(x.member.id.slice(-12))).sort((a, b) => a - b);
+}
+
+test('WTP pick policy: global (not per source), ordered by engagement, then recency, then content_hash, then record id', () => {
+  const members: ClusterMemberInput[] = [
+    member({ n: 1, source: 'a', wtp: true, engagement: { likes: 90 }, published: '2026-01-01T00:00:00Z' }),
+    member({ n: 2, source: 'b', wtp: true, engagement: { likes: 90 }, published: '2026-06-01T00:00:00Z' }),  // same engagement as 1, more recent: ranks first
+    member({ n: 3, source: 'b', wtp: true, engagement: { likes: 70 }, published: '2026-06-01T00:00:00Z', hash: hex(5) }),
+    member({ n: 4, source: 'a', wtp: true, engagement: { likes: 70 }, published: '2026-06-01T00:00:00Z', hash: hex(2) }), // smaller hash than 3
+    member({ n: 5, source: 'a', wtp: true, engagement: { likes: 70 }, published: '2026-06-01T00:00:00Z', hash: hex(2) }), // same hash as 4: record id decides
+    member({ n: 6, source: 'a', wtp: true, engagement: { likes: 10 } }),
+    ...Array.from({ length: 12 }, (_, i) => member({ n: 100 + i, source: 'a', engagement: { likes: 1000 + i } })),
+  ];
+  // Ranking: 2, 1 (engagement 90, newer first), 4, 5 (70, hash then id), 3, 6. The four places go to 2, 1, 4, 5, from both sources.
+  assert.deepEqual(wtpPassNs(members), [1, 2, 4, 5]);
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) assert.deepEqual(wtpPassNs(shuffled(members, seed)), [1, 2, 4, 5], `seed ${seed}`);
+  assert.deepEqual(wtpPassNs([...members].reverse()), [1, 2, 4, 5]);
+});
+
+test('WTP pick policy: a missing published_at is the least recent, so a dated record wins an otherwise equal contest', () => {
+  const members = [
+    member({ n: 1, wtp: true, engagement: { likes: 5 }, published: null, hash: hex(1) }),
+    member({ n: 2, wtp: true, engagement: { likes: 5 }, published: '2001-01-01T00:00:00Z', hash: hex(9) }),
+    member({ n: 3, wtp: true, engagement: { likes: 5 }, published: null, hash: hex(2) }),
+    member({ n: 4, wtp: true, engagement: { likes: 5 }, published: '2002-01-01T00:00:00Z', hash: hex(9) }),
+    member({ n: 5, wtp: true, engagement: { likes: 5 }, published: null, hash: hex(3) }),
+  ];
+  // Dated first (newest first: 4, 2), then undated by hash (1, 2 -> records 1 and 3); record 5 (hash 3) misses the four.
+  assert.deepEqual(wtpPassNs(members), [1, 2, 3, 4]);
+  assert.deepEqual(wtpPassNs(shuffled(members, 3)), [1, 2, 3, 4]);
+});
+
+test('WTP pick policy: a total tie (same engagement, date and hash) is decided by record id, from any ordering of the input', () => {
+  const members = Array.from({ length: 10 }, (_, i) => member({ n: i + 1, source: i % 2 ? 'a' : 'b', wtp: true, engagement: { likes: 7 }, hash: hex(1) }));
+  assert.deepEqual(wtpPassNs(members), [1, 2, 3, 4]);
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) assert.deepEqual(wtpPassNs(shuffled(members, seed)), [1, 2, 3, 4], `seed ${seed}`);
+});
+
+test('WTP pick policy: a WTP candidate that misses the four still competes in the fill pass', () => {
+  const members = [1, 2, 3, 4, 5].map((n) => member({ n, wtp: true, engagement: { likes: 100 - n } }));
+  const p = prepared(input(members));
+  assert.equal(p.pack.excerpts.length, 5);                 // all five are selected: four by the WTP pass, the fifth by the fill pass
+  assert.equal(p.diagnostics.selected_wtp_first, 4);
+  assert.deepEqual(wtpPassNs(members), [1, 2, 3, 4]);
+});
+
+test('WTP pick policy: the flag of a collapsed discussion is the kept record\'s, so a lower-engagement sibling cannot smuggle a WTP quote in', () => {
+  const members = [
+    member({ n: 1, discussion: 'd', wtp: false, engagement: { likes: 9 } }),
+    member({ n: 2, discussion: 'd', wtp: true, engagement: { likes: 1 } }),
+    ...Array.from({ length: 5 }, (_, i) => member({ n: 10 + i, wtp: i === 0 })),
+  ];
+  assert.deepEqual(wtpPassNs(members), [10]);
+});
+
+test('whole-pipeline permutation check with heavy WTP ties: pack, index and canonical pack are identical for many orderings', () => {
+  const members: ClusterMemberInput[] = [
+    ...Array.from({ length: 14 }, (_, i) => member({ n: i + 1, source: ['a', 'b', 'c'][i % 3], wtp: true, engagement: { likes: i % 2 }, hash: hex(i % 3) })),
+    ...Array.from({ length: 20 }, (_, i) => member({ n: 100 + i, source: ['a', 'b', 'c'][i % 3], engagement: { likes: i % 4 }, published: i % 5 === 0 ? null : '2026-03-01T00:00:00Z' })),
+  ];
+  const base = prepared(input(members));
+  for (const seed of [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]) {
+    const again = prepared(input(shuffled(members, seed)));
+    assert.deepEqual(again.pack, base.pack);
+    assert.deepEqual(again.index, base.index);
+    assert.equal(again.canonical_pack_json, base.canonical_pack_json);
+  }
+});
+
+test('engagement does not depend on the order of the keys of the engagement object (floating-point addition is not associative)', () => {
+  // With keys summed in insertion order a,c,b the total is 1; in order a,b,c it is 0. Summing in sorted key order makes it 0 either way,
+  // so the rival (engagement 0.5) wins both times.
+  const x1 = { a: 1e16, c: -1e16, b: 1 };
+  const x2 = { a: 1e16, b: 1, c: -1e16 };
+  for (const x of [x1, x2]) {
+    const p = prepared(input([
+      member({ n: 1, discussion: 'd', engagement: x }),
+      member({ n: 2, discussion: 'd', engagement: { z: 0.5 } }),
+    ]));
+    assert.deepEqual(selectedNs(p), [2], JSON.stringify(Object.keys(x)));
+  }
 });
 
 void rid; void cluster;

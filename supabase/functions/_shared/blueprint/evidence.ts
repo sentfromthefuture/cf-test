@@ -32,9 +32,9 @@ export { SUFFICIENCY_REASON_MESSAGES, SUFFICIENCY_THRESHOLDS } from './evidence-
 export {
   buildGroundingContext, checkGeneralisation, checkNameGrounding, checkNumericGrounding, checkRelevanceFloor, checkSupportingGrade,
   checkWtpEvidence, containsGeneralisation, contentStems, extractNumerals, isSupportingGrade, normaliseForMatch, renderMetricValue,
-  statesPriceOrShare,
+  findPriceOrShareStatements, statesPriceOrShare,
 } from './evidence-grounding.ts';
-export type { GroundingContext, GroundingItem, GuardReason, GuardResult, WtpRuleInput, WtpRuleResult } from './evidence-grounding.ts';
+export type { GroundingContext, GroundingItem, GuardReason, GuardResult, PriceOrShareKind, WtpRuleInput, WtpRuleResult } from './evidence-grounding.ts';
 
 /**
  * Builds the evidence pack, the backend evidence index, the sufficiency verdict and the canonical pack from cluster rows and member rows.

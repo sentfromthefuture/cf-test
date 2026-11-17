@@ -11,7 +11,7 @@
 // columns this module must not forward, such as author_ref).
 import { FORMAT } from './constants.ts';
 import {
-  COMPONENT_BASIS_TO_CLASS, EXCERPT_MAX_CODE_POINTS, INPUT_LIMITS, METRIC_MAPPING_KEY_MAX, METRIC_VALUE_MAX_ITEMS, SCORE_COMPONENT_KEYS,
+  COMPONENT_BASIS_TO_CLASS, EXCERPT_MAX_CODE_POINTS, INPUT_LIMITS, METRIC_MAPPING_KEY_MAX, METRIC_VALUE_MAX_ITEMS, SCORE_COMPONENT_KEYS, VALUE_RANGES,
 } from './evidence-constants.ts';
 import type { ScoreComponentBasis } from './evidence-constants.ts';
 import type { PrepareError, PrepareErrorCode } from './evidence-types.ts';
@@ -104,14 +104,22 @@ function readNullableText(c: Errs, path: string, v: unknown, max: number): strin
 
 function readCount(c: Errs, path: string, v: unknown): number | undefined {
   if (typeof v !== 'number') { c.err('invalid_type', path, 'Expected a number.'); return undefined; }
-  if (!Number.isInteger(v) || v < 0 || v > Number.MAX_SAFE_INTEGER) { c.err('number_out_of_range', path, 'Expected a whole number of at least 0.'); return undefined; }
-  return v;
+  if (!Number.isInteger(v) || v < 0 || v > Number.MAX_SAFE_INTEGER) { c.err('number_out_of_range', path, `Expected a whole number between 0 and ${Number.MAX_SAFE_INTEGER}.`); return undefined; }
+  return v === 0 ? 0 : v; // -0 is the same count as 0
+
 }
 
-function readFiniteOrNull(c: Errs, path: string, v: unknown): number | null | undefined {
+/**
+ * A finite number inside [min, max], or null. A value outside the range, NaN, Infinity or an extreme finite value such as Number.MAX_VALUE is
+ * rejected here with a specific, fixed message, so it can never reach the rounding and never turn into a generic internal error.
+ */
+function readRangedOrNull(c: Errs, path: string, v: unknown, range: { readonly min: number; readonly max: number }): number | null | undefined {
   if (v === null) return null;
   if (typeof v !== 'number') { c.err('invalid_type', path, 'Expected a number or null.'); return undefined; }
-  if (!Number.isFinite(v)) { c.err('number_out_of_range', path, 'Expected a finite number.'); return undefined; }
+  if (!Number.isFinite(v) || v < range.min || v > range.max) {
+    c.err('number_out_of_range', path, `The value must be a finite number between ${range.min} and ${range.max}.`);
+    return undefined;
+  }
   return v;
 }
 
@@ -146,8 +154,8 @@ function readCluster(c: Errs, v: unknown): ValidCluster | undefined {
   const sourceCount = readCount(c, at(p, 'source_count'), own(v, 'source_count'));
   const recent = readCount(c, at(p, 'recent_discussions'), own(v, 'recent_discussions'));
   const prior = readCount(c, at(p, 'prior_discussions'), own(v, 'prior_discussions'));
-  const growth = readFiniteOrNull(c, at(p, 'growth_rate'), own(v, 'growth_rate'));
-  const severity = readFiniteOrNull(c, at(p, 'severity_avg'), own(v, 'severity_avg'));
+  const growth = readRangedOrNull(c, at(p, 'growth_rate'), own(v, 'growth_rate'), VALUE_RANGES.growthRatePct);
+  const severity = readRangedOrNull(c, at(p, 'severity_avg'), own(v, 'severity_avg'), VALUE_RANGES.severityAvg);
   const wtp = readCount(c, at(p, 'wtp_signals'), own(v, 'wtp_signals'));
 
   const rawConfidence = own(v, 'confidence');
@@ -177,11 +185,11 @@ function readCluster(c: Errs, v: unknown): ValidCluster | undefined {
         const countOk = typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER;
         if (!keyOk) badKeys++;
         if (!countOk) badCounts++;
-        if (keyOk && countOk) competitors.push([k, n as number]);
+        if (keyOk && countOk) competitors.push([k, (n as number) === 0 ? 0 : (n as number)]);
       }
       // Counts only: a competitor name is third-party text and is never echoed.
       if (badKeys > 0) c.err('string_invalid_characters', at(p, 'competitors'), `${badKeys} name(s) are blank, too long or contain invalid characters.`);
-      if (badCounts > 0) c.err('number_out_of_range', at(p, 'competitors'), `${badCounts} count(s) are not whole numbers of at least 0.`);
+      if (badCounts > 0) c.err('number_out_of_range', at(p, 'competitors'), `${badCounts} count(s) are not whole numbers between 0 and ${Number.MAX_SAFE_INTEGER}.`);
     }
   }
 
@@ -200,7 +208,7 @@ function readCluster(c: Errs, v: unknown): ValidCluster | undefined {
           const cp = at(at(at(p, 'scores'), 'components'), key);
           if (!isRec(comp)) { c.err('invalid_type', cp, 'Expected an object.'); return; }
           if (!required(c, comp, cp, ['value', 'basis'])) return;
-          const value = readFiniteOrNull(c, at(cp, 'value'), own(comp, 'value'));
+          const value = readRangedOrNull(c, at(cp, 'value'), own(comp, 'value'), VALUE_RANGES.scoreComponent);
           const rawBasis = own(comp, 'basis');
           let basis: ScoreComponentBasis | undefined;
           if (typeof rawBasis !== 'string') c.err('invalid_type', at(cp, 'basis'), 'Expected a string.');
@@ -234,7 +242,9 @@ const SIGNAL_FIELDS = ['is_problem', 'wtp_evidence', 'analysis_method'] as const
 /** Sum of the numeric values of an engagement object, as dr_refresh_clusters does (non-numeric values are ignored). */
 function engagementTotal(o: Rec): number {
   let sum = 0;
-  for (const k of Object.keys(o)) {
+  // Keys are visited in sorted order. Floating-point addition is not associative, so summing in insertion order would let the order of the
+  // keys of the input object (which is not part of its meaning) change the total once values are large. Sorted order removes that dependence.
+  for (const k of Object.keys(o).sort()) {
     const v = o[k];
     if (typeof v === 'number' && Number.isFinite(v)) sum += v;
     else if (typeof v === 'string' && NUMERIC_TEXT.test(v)) sum += Number(v);

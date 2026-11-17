@@ -45,7 +45,7 @@ const daysIn = (y: number, m: number): number => [31, y % 4 === 0 && (y % 100 !=
 
 /**
  * Reads an ISO 8601 date-time WITH a zone designator and returns epoch milliseconds, or null if the text is not exactly that
- * (or is not a real calendar time). Sub-millisecond digits are dropped (not rounded). Does not use Date.parse.
+ * (or is not a real calendar time, or falls outside years 0000-9999 in UTC). Sub-millisecond digits are dropped (not rounded). Does not use Date.parse.
  */
 export function isoToEpochMs(s: string): number | null {
   const m = ISO.exec(s);
@@ -65,7 +65,11 @@ export function isoToEpochMs(s: string): number | null {
   d.setUTCFullYear(year, month - 1, day); // setUTCFullYear, not Date.UTC: years 0-99 must not be mapped to 1900-1999
   d.setUTCHours(hour, minute, second, ms);
   const t = d.getTime() - offsetMinutes * 60_000;
-  return Number.isFinite(t) ? t : null;
+  if (!Number.isFinite(t)) return null;
+  // The zone offset can push the UTC instant outside years 0000-9999 (for example 0000-01-01T00:00:00+05:00 is year -0001 in UTC), where
+  // toISOString writes an extended year ("-000001-...") that is not a valid index timestamp. Such an instant is rejected.
+  const utcYear = new Date(t).getUTCFullYear();
+  return utcYear >= 0 && utcYear <= 9999 ? t : null;
 }
 
 /** Canonical UTC form used in the evidence index, at second precision as in the documented example: 2026-09-02T08:00:00Z. */

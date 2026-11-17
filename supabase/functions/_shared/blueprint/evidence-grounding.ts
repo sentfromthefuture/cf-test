@@ -23,12 +23,18 @@
 //   - Relevance: one shared word stem is enough. It blocks the cheapest failure only, and it assumes a script that separates words with spaces
 //     (an unspaced script such as Chinese yields arbitrary five-character "words").
 //   - Generalisation: a fixed English word list. A paraphrase of "many" is not detected.
-//   - Price and share (WTP): currency symbols, currency codes and words next to a number, and percentages, are detected. A price or share
-//     written in words ("half of users", "a few hundred") is not.
+//   - Price, budget, conversion rate and share (WTP): detected by wording, in the families listed on `findPriceOrShareStatements`: currency
+//     amounts (symbols, codes, currency words, spelled-out amounts such as "fifty dollars"), percentages, billing rates ("10/month"), the words
+//     price/pricing/fee, the word budget in any form, conversion wording ("conversion rate", "convert to paid", "trial-to-paid"), and shares
+//     ("2 in 10", "1/3", "half of", "the majority", "most users", "a share of"). The detector fails CLOSED: it also flags harmless mentions
+//     ("a third-party fee schedule is unclear"), which only costs an `evidenced` status. It does NOT detect: an amount in words with no
+//     currency word ("a few hundred a month"), vague price level ("cheap", "expensive", "premium"), a pricing model without a figure
+//     ("per seat"), a share in an unlisted phrasing ("a good chunk of them"), other languages, or a statement spread across two sentences.
+//     It cannot prove the text says ONLY that some authors said they would pay; it catches the listed shapes of saying more.
 import type { Basis, MetricClass, MetricEvidence } from './contract.ts';
 import {
-  CURRENCY_CODES, CURRENCY_SYMBOLS, CURRENCY_WORDS, GENERALISATION_MIN_SUPPORTING_ITEMS, GENERALISATION_WORDS, NAME_LENGTH, RELEVANCE,
-  RELEVANCE_STOP_WORDS, WTP_MIN_EXCERPTS,
+  CURRENCY_CODES, CURRENCY_SYMBOLS, CURRENCY_WORDS, GENERALISATION_MIN_SUPPORTING_ITEMS, GENERALISATION_WORDS, NAME_LENGTH, NUMBER_WORDS,
+  POPULATION_NOUNS, RELEVANCE, RELEVANCE_STOP_WORDS, WTP_MIN_EXCERPTS,
 } from './evidence-constants.ts';
 import type { EvidencePack } from './evidence-types.ts';
 
@@ -203,20 +209,63 @@ export function checkGeneralisation(ctx: GroundingContext, claimText: string, re
 // 6. Willingness to pay (section 6)
 // ---------------------------------------------------------------------------------------------------------------------------------
 
+export type PriceOrShareKind = 'currency' | 'percentage' | 'billing_rate' | 'price_word' | 'budget' | 'conversion' | 'share';
+
 const SYMBOL = `[${CURRENCY_SYMBOLS}]`;
 const CODE = `\\b(?:${CURRENCY_CODES.join('|')})\\b`;
-const PRICE_OR_SHARE: readonly RegExp[] = [
-  new RegExp(`${SYMBOL}\\s?\\p{Nd}|\\p{Nd}\\s?${SYMBOL}`, 'u'),                                                    // $20, 20$, €5
-  new RegExp(`${CODE}\\s?\\p{Nd}|\\p{Nd}\\s?${CODE}`, 'iu'),                                                       // USD 20, 20 zmw
-  new RegExp(`\\p{Nd}[\\p{Nd}.,]*\\s*(?:${CURRENCY_WORDS.join('|')})\\b`, 'iu'),                                    // 20 dollars, 5 kwacha
-  /%|\bper\s?cent(?:age)?\b|\bpercent(?:age)?\b|\bpct\b/iu,                                                        // 60%, percent, per cent
+const CURRENCY_WORD = `(?:${CURRENCY_WORDS.join('|')})`;
+const NUM = `\\b(?:${NUMBER_WORDS.join('|')})\\b`;
+const POPULATION = `(?:${POPULATION_NOUNS.join('|')})`;
+
+/** Families of statements the willingness-to-pay text may not make (section 6). All are tested on NFKC-folded text, case-insensitively. */
+const PRICE_OR_SHARE: readonly (readonly [PriceOrShareKind, readonly RegExp[]])[] = [
+  ['currency', [
+    new RegExp(`${SYMBOL}\\s?\\p{Nd}|\\p{Nd}\\s?${SYMBOL}`, 'u'),                                  // $20, 20$, €5
+    new RegExp(`${CODE}\\s?\\p{Nd}|\\p{Nd}\\s?${CODE}`, 'iu'),                                     // USD 20, 20 zmw
+    new RegExp(`\\p{Nd}[\\p{Nd}.,]*\\s*${CURRENCY_WORD}\\b`, 'iu'),                                // 20 dollars, 5 kwacha
+    new RegExp(`${NUM}\\s+${CURRENCY_WORD}\\b`, 'iu'),                                              // fifty dollars, a few bucks
+  ]],
+  ['percentage', [
+    /%|\bper\s?cent(?:age)?\b|\bpercent(?:age)?\b|\bpct\b/iu,                                     // 60%, percent, per cent, percentage
+  ]],
+  ['billing_rate', [
+    /\p{Nd}[\p{Nd}.,]*\s*(?:\/|per\s+)\s*(?:mo|month|mth|yr|year|annum|seat|user|licen[cs]e|week|day|hour)\b/iu, // 10/month, 5 per seat
+    /\b(?:monthly|annual|yearly|weekly|daily|one[\s-]time)\s+(?:fee|price|cost|rate|payment|subscription)s?\b/iu,    // monthly fee
+  ]],
+  ['price_word', [
+    /\b(?:price|prices|priced|pricing|pricey|fee|fees)\b/iu,                                          // "at a reasonable price", "pricing"
+  ]],
+  ['budget', [
+    /\bbudget(?:s|ed|ing|ary)?\b/iu,                                                                   // budget, budgeted, "budget approved"
+  ]],
+  ['conversion', [
+    /\bconversions?\b/iu,                                                                              // conversion, conversion rate
+    /\bconvert(?:s|ed|ing)?\s+(?:to|into)\s+(?:paid|paying|customers?|subscribers?|buyers?|users?|premium|pro)\b/iu,
+    /\b(?:trial|free|freemium)[\s-]+to[\s-]+(?:paid|paying|premium|pro)\b/iu,                        // trial-to-paid
+    /\b(?:upgrade|purchase|signup|sign[\s-]?up|close|win|take|activation|checkout|click[\s-]?through|opt[\s-]?in)[\s-]+rates?\b/iu,
+  ]],
+  ['share', [
+    /\p{Nd}+\s*(?:in|out\s+of(?:\s+every)?|of\s+every)\s*\p{Nd}+/iu,                                            // 2 in 10, 3 out of 5, 1 of every 4
+    /\p{Nd}+\s*\/\s*\p{Nd}+/u,                                                                      // 1/3
+    new RegExp(`${NUM}\\s+(?:in|out\\s+of(?:\\s+every)?|of\\s+every)\\s+(?:a\\s+|an\\s+)?(?:${NUM}|\\p{Nd}+)`, 'iu'), // one in five, two out of three
+    /\b(?:half|thirds?|quarters?|fifths?|tenths?)\s+of\b|\bhalf\s+(?:the|my|our|all)\b/iu,           // half of, a third of, two thirds of
+    /\b(?:majority|minority)\b/iu,                                                                     // the majority, a minority
+    new RegExp(`\\b(?:most|nearly\\s+all|almost\\s+all|virtually\\s+all|all)\\s+(?:of\\s+)?(?:the\\s+)?${POPULATION}\\b`, 'iu'), // most users, all of the teams
+    /\b(?:share|proportion|fraction|portion|ratio)\s+of\b/iu,                                         // a share of users
+  ]],
 ];
 
-/** True when the text states a currency amount or a percentage. Figures written in words are not detected (see the limits above). */
-export function statesPriceOrShare(text: string): boolean {
+/**
+ * The families of price, budget, conversion-rate or share statement found in the text, in a fixed order (empty if none). Content-free: it
+ * names the family, never the words. Lexical only; see the limits in the header of this file.
+ */
+export function findPriceOrShareStatements(text: string): PriceOrShareKind[] {
   const t = text.normalize('NFKC');
-  return PRICE_OR_SHARE.some((re) => re.test(t));
+  return PRICE_OR_SHARE.filter(([, patterns]) => patterns.some((re) => re.test(t))).map(([kind]) => kind);
 }
+
+/** True when the text states a price, a budget, a conversion rate or a share (or a currency amount or percentage). Lexical; see the header. */
+export const statesPriceOrShare = (text: string): boolean => findPriceOrShareStatements(text).length > 0;
 
 export interface WtpRuleInput {
   status: 'evidenced' | 'not_evidenced' | 'unknown';
@@ -233,7 +282,7 @@ export interface WtpRuleResult extends GuardResult {
 /**
  * `status: "evidenced"` is acceptable only if the summary is verified_evidence AND cites at least two distinct excerpts that both carry
  * wtp: true (the pack holds one excerpt per discussion, so two excerpts are two independent discussions) AND the text states no price, budget,
- * conversion rate or share. One quote is deliberately not enough. For any other status the rule does not apply (the canonical `unknown`
+ * conversion rate or share (see `findPriceOrShareStatements`). One quote is deliberately not enough. For any other status the rule does not apply (the canonical `unknown`
  * replacement belongs to the verifier).
  *
  * The no-price rule is checked here on its own because evidence contract section 6 justifies it with "no pack item contains one", which is
