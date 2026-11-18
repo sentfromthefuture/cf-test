@@ -12,7 +12,7 @@ import type {
   VerificationReport,
 } from './contract.ts';
 import type { PreparedEvidence } from './evidence-types.ts';
-import type { BlueprintResultIdentity } from './result-store.ts';
+import type { BlueprintResultIdentity, BlueprintResultStore, StoredBlueprintResult } from './result-store.ts';
 import type { BlueprintPasses } from './runtime.ts';
 import { BLUEPRINT_PROMPT_VERSION } from './prompts.ts';
 import { refSites, countClaimsByBasis } from './validate-evidence.ts';
@@ -99,4 +99,26 @@ export async function assembleProductBlueprint(input: {
   const validated = validateProductBlueprint(blueprint);
   if (!validated.ok) return { ok: false, reason: 'assembled_contract_invalid' };
   return { ok: true, blueprint: validated.value };
+}
+
+
+/**
+ * The lifecycle's finalizer adapter: only a fully verified and assembled result can reach the
+ * atomic database RPC. A deterministic assembly rejection returns null so the lifecycle releases
+ * the pending quota reservation; transient persistence errors are allowed to throw for safe retry.
+ */
+export async function finalizeBlueprintProduct(input: {
+  identity: BlueprintResultIdentity;
+  reservationId: string;
+  request: BlueprintRequestParams;
+  evidence: PreparedEvidence;
+  passes: BlueprintPasses;
+  passRecords: PassRecord[];
+  resultStore: Pick<BlueprintResultStore, 'finalize'>;
+  now?: () => Date;
+  createId?: () => string;
+}): Promise<StoredBlueprintResult | null> {
+  const assembled = await assembleProductBlueprint(input);
+  if (!assembled.ok) return null;
+  return input.resultStore.finalize(input.identity, input.reservationId, assembled.blueprint);
 }
