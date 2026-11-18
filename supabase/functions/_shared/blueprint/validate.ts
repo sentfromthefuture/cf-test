@@ -18,7 +18,7 @@ import { checkAssembled, readBackendStructure } from './validate-backend.ts';
 import { checkEvidenceRules } from './validate-evidence.ts';
 import { checkIntegrity } from './validate-integrity.ts';
 import { Ctx, isRec, snapshotInput, ValidationError, ValidationResult } from './validate-core.ts';
-import { readModelStructure } from './validate-model.ts';
+import { readModelStructure, readPassStructure } from './validate-model.ts';
 
 export type { ValidationError, ValidationErrorCode, ValidationResult } from './validate-core.ts';
 
@@ -85,4 +85,29 @@ export function validateBlueprintModelOutput(input: unknown, options: ModelOutpu
 /** Validates the assembled blueprint: the model-owned document plus the backend-owned sections and their consistency with it. */
 export function validateProductBlueprint(input: unknown): ValidationResult<ProductBlueprintV1> {
   return run<ProductBlueprintV1>('assembled', input, {});
+}
+
+
+/** Strict shape and content-policy validation for one A/B/C model response before it is used as a handoff. */
+export function validateBlueprintPassOutput(
+  pass: 'A' | 'B' | 'C',
+  input: unknown,
+): ValidationResult<Record<string, unknown>> {
+  try {
+    const snap = snapshotInput(input);
+    if (!snap.ok) return fail([snap.error]);
+    const c = new Ctx('model');
+    const value = readPassStructure(c, pass, snap.value);
+    if (c.failed || !value) return fail(c.errors, c.truncated);
+    for (const site of c.texts) {
+      for (const finding of scanText(site.value, site.kind)) {
+        if (finding === 'url') c.err('contains_url', site.path, 'Model-written text must not contain a URL.');
+        else if (finding === 'sql') c.err('contains_sql', site.path, 'The text looks like SQL or an expression; the design must be described in plain language.');
+        else c.err('contains_executable', site.path, 'The text looks like executable or markup content, which is not allowed.');
+      }
+    }
+    return c.failed ? fail(c.errors, c.truncated) : { ok: true, value, errors: [] };
+  } catch {
+    return fail([{ code: 'validator_internal_error', path: '', message: 'The validator could not process this input; it was rejected.' }]);
+  }
 }

@@ -612,3 +612,39 @@ export function readModelStructure(c: Ctx, root: unknown): Rec | undefined {
   if (hasKey(o, 'risks')) readRisks(c, '/risks', o.risks);
   return o;
 }
+
+
+/**
+ * Phase B: validate one model pass before any of its free text is forwarded to a later pass.
+ * This checks the exact section shape and all nested primitive/enum/count/string rules. Cross-section
+ * references and evidence-basis rules are intentionally checked on the fully merged document after C.
+ */
+export function readPassStructure(c: Ctx, pass: 'A' | 'B' | 'C', root: unknown): Rec | undefined {
+  if (!isRec(root)) { c.err('invalid_type', '', 'Expected a JSON object at the top level.'); return undefined; }
+  const keys = pass === 'A'
+    ? ['schema_version', 'opportunity', 'market_evidence', 'personas', 'product', 'mvp', 'journeys', 'workflows', 'commercial']
+    : pass === 'B' ? ['architecture', 'database'] : ['implementation', 'testing', 'risks'];
+  const o = readObject(c, '', root, keys);
+  if (!o) return undefined;
+  if (pass === 'A') {
+    if (typeof o.schema_version !== 'string' || o.schema_version !== BLUEPRINT_SCHEMA_VERSION) {
+      c.err('unsupported_schema_version', '/schema_version', 'This schema version is not supported.');
+    }
+    readOpportunity(c, '/opportunity', o.opportunity);
+    readMarketEvidence(c, '/market_evidence', o.market_evidence);
+    readPersonas(c, '/personas', o.personas);
+    readProduct(c, '/product', o.product);
+    readMvp(c, '/mvp', o.mvp);
+    readJourneys(c, '/journeys', o.journeys);
+    readWorkflows(c, '/workflows', o.workflows);
+    readCommercial(c, '/commercial', o.commercial);
+  } else if (pass === 'B') {
+    readArchitecture(c, '/architecture', o.architecture);
+    readDatabase(c, '/database', o.database);
+  } else {
+    readImplementation(c, '/implementation', o.implementation);
+    readTesting(c, '/testing', o.testing);
+    readRisks(c, '/risks', o.risks);
+  }
+  return o;
+}
