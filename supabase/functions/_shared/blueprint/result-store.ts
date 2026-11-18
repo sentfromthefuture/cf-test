@@ -1,6 +1,7 @@
 // Server-side persistence for completed, backend-validated ProductBlueprintV1 results.
 // This adapter is deliberately independent of browser clients and uses only the service-role key.
 import type { ProductBlueprintV1 } from './contract.ts';
+import { validateProductBlueprint } from './validate.ts';
 
 export interface BlueprintResultIdentity {
   userId: string;
@@ -15,6 +16,12 @@ export interface BlueprintResultStoreConfig {
   supabaseUrl: string;
   serviceRoleKey: string;
   fetchImpl?: typeof fetch;
+}
+
+export interface StoredBlueprintResult {
+  id: string;
+  created_at: string;
+  blueprint: ProductBlueprintV1;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -32,12 +39,54 @@ export class BlueprintResultStore {
     this.baseUrl = config.supabaseUrl.replace(/\/$/, '') + '/rest/v1/dr_blueprints';
   }
 
-  async save(identity: BlueprintResultIdentity, blueprint: ProductBlueprintV1): Promise<{ id: string; created_at: string }> {
+  private assertIdentity(identity: BlueprintResultIdentity): void {
     if (!UUID.test(identity.userId) || !UUID.test(identity.clusterId)
       || !SHA256.test(identity.requestKeyHash)
       || !identity.model.endsWith(':free')
-      || !identity.configVersion
-      || blueprint.meta.contract_version !== 'product-blueprint.v1'
+      || !identity.configVersion) {
+      throw new TypeError('invalid_blueprint_result_identity');
+    }
+  }
+
+  /** Returns the exact prior result for a retry; never searches by client-controlled data alone. */
+  async get(identity: BlueprintResultIdentity): Promise<StoredBlueprintResult | null> {
+    this.assertIdentity(identity);
+    const query = new URLSearchParams({
+      select: 'id,created_at,blueprint',
+      user_id: 'eq.' + identity.userId,
+      cluster_id: 'eq.' + identity.clusterId,
+      request_key_hash: 'eq.' + identity.requestKeyHash,
+      limit: '2',
+    });
+    const response = await this.fetchImpl(this.baseUrl + '?' + query.toString(), {
+      method: 'GET',
+      headers: {
+        apikey: this.config.serviceRoleKey,
+        authorization: 'Bearer ' + this.config.serviceRoleKey,
+        accept: 'application/json',
+      },
+    });
+    if (!response.ok) throw new Error('blueprint_result_read_failed:' + response.status);
+    const rows: unknown = await response.json();
+    if (!Array.isArray(rows)) throw new Error('blueprint_result_read_invalid_response');
+    if (rows.length === 0) return null;
+    if (rows.length !== 1) throw new Error('blueprint_result_identity_ambiguous');
+    const row = rows[0];
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+      throw new Error('blueprint_result_read_invalid_response');
+    }
+    const value = row as Record<string, unknown>;
+    if (typeof value.id !== 'string' || typeof value.created_at !== 'string') {
+      throw new Error('blueprint_result_read_invalid_response');
+    }
+    const validated = validateProductBlueprint(value.blueprint);
+    if (!validated.ok) throw new Error('blueprint_result_failed_validation');
+    return { id: value.id, created_at: value.created_at, blueprint: validated.value };
+  }
+
+  async save(identity: BlueprintResultIdentity, blueprint: ProductBlueprintV1): Promise<{ id: string; created_at: string }> {
+    this.assertIdentity(identity);
+    if (blueprint.meta.contract_version !== 'product-blueprint.v1'
       || !SHA256.test(blueprint.meta.evidence_pack.pack_sha256)) {
       throw new TypeError('invalid_blueprint_result');
     }
