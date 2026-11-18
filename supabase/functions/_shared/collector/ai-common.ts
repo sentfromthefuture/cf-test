@@ -7,7 +7,7 @@
 import { HttpClient, HttpError, Logger, RateLimitError } from './types.ts';
 import { safeError, sha256Hex } from './util.ts';
 
-export type AiTask = 'decisions' | 'summary';
+export type AiTask = 'decisions' | 'summary' | 'blueprint';
 
 /** Only explicitly free model slugs are accepted anywhere in the AI layer: there is no paid model and no paid fallback. */
 export const isFreeModelSlug = (m: string) => /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*:free$/i.test(m);
