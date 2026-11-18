@@ -25,8 +25,8 @@ declare
   v_created_at timestamptz;
 begin
   if p_reservation is null or p_user is null or p_cluster is null
-     or p_request_key_hash !~ '^[a-f0-9]{64}$'
-     or p_evidence_pack_sha256 !~ '^[a-f0-9]{64}$'
+     or p_request_key_hash is null or p_request_key_hash !~ '^[a-f0-9]{64}$'
+     or p_evidence_pack_sha256 is null or p_evidence_pack_sha256 !~ '^[a-f0-9]{64}$'
      or p_schema_version <> 'product-blueprint.v1'
      or p_model is null or p_model !~ '^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*:free$'
      or p_config_version is null or length(p_config_version) < 1
