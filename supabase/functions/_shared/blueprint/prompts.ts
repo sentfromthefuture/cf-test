@@ -16,9 +16,9 @@ const SCHEMAS = {
 } as const;
 
 export const BLUEPRINT_PASS_PROMPTS = {
-  A: [PROMPT_CORE, PASS_RULES.A, 'CLAIM schema:', CLAIM_SCHEMA, 'PASS A schema:', SCHEMAS.A].join('\\n\\n'),
-  B: [PROMPT_CORE, PASS_RULES.B, 'PASS B schema:', SCHEMAS.B].join('\\n\\n'),
-  C: [PROMPT_CORE, PASS_RULES.C, 'CLAIM schema:', CLAIM_SCHEMA, 'PASS C schema:', SCHEMAS.C].join('\\n\\n'),
+  A: [PROMPT_CORE, PASS_RULES.A, 'CLAIM schema:', CLAIM_SCHEMA, 'PASS A schema:', SCHEMAS.A].join('\n\n'),
+  B: [PROMPT_CORE, PASS_RULES.B, 'PASS B schema:', SCHEMAS.B].join('\n\n'),
+  C: [PROMPT_CORE, PASS_RULES.C, 'CLAIM schema:', CLAIM_SCHEMA, 'PASS C schema:', SCHEMAS.C].join('\n\n'),
 } as const;
 
 export function blueprintSystemPrompt(pass: 'A' | 'B' | 'C'): string {
