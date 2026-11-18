@@ -82,7 +82,7 @@ async function authUser(url: string, anonKey: string, authorization: string): Pr
 function quotaRpc(url: string, serviceKey: string) {
   return {
     async rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
-      const response = await fetch(url.replace(/\\/$/, '') + '/rest/v1/rpc/' + name, {
+      const response = await fetch(url.replace(/\/$/, '') + '/rest/v1/rpc/' + name, {
         method: 'POST',
         headers: {
           apikey: serviceKey,
@@ -210,7 +210,7 @@ Deno.serve(async (req) => {
   const apiKey = Deno.env.get('OPENROUTER_API_KEY') || '';
   const model = Deno.env.get('BLUEPRINT_MODEL') || BLUEPRINT_DEFAULT_MODEL;
   const timeoutRaw = Deno.env.get('BLUEPRINT_PASS_TIMEOUT_MS') || '90000';
-  const timeoutMs = /^\\d+$/.test(timeoutRaw) ? Number(timeoutRaw) : NaN;
+  const timeoutMs = /^\d+$/.test(timeoutRaw) ? Number(timeoutRaw) : NaN;
   const provider = { apiKey, model, timeoutMs };
   if (blueprintProviderConfigProblem(provider) !== null) return deny(req, 'blueprint_provider_not_configured', 503);
 
