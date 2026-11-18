@@ -205,7 +205,8 @@ Deno.serve(async (req) => {
   if (!prepared.ok) return deny(req, 'research_evidence_invalid', 422);
 
   // Start with a conservative per-user allowance until an explicit quota is configured.
-  const dailyLimit = readDailyBlueprintLimit(Deno.env.get('BLUEPRINT_DAILY_LIMIT') || '1') ?? 1;
+  // Small initial allowance for real-world validation; operators can override via BLUEPRINT_DAILY_LIMIT.
+  const dailyLimit = readDailyBlueprintLimit(Deno.env.get('BLUEPRINT_DAILY_LIMIT') || '3') ?? 3;
 
   const apiKey = Deno.env.get('OPENROUTER_API_KEY') || '';
   // Reuse the existing OpenRouter model secret; allow a Blueprint-specific override.
