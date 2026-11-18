@@ -29,7 +29,7 @@ test('Pass B handoff is a fresh allowlisted DTO, not raw Pass A output', () => {
   const passA = clone(passAOnly()) as unknown as PassAOutput;
   const payload = buildBlueprintPassPayload({ pass: 'B', request, evidence, passA }) as any;
   assert.equal(payload.task, 'blueprint_pass_b');
-  assert.equal(Object.keys(payload).sort().join(','), 'contract,features,personas,product,request,task');
+  assert.equal(Object.keys(payload).sort().join(','), 'contract,features,personas,product,request,task,workflows');
   assert.equal('evidence_pack' in payload, false);
   assert.ok(payload.features.length > 0);
   assert.equal(typeof payload.product.positioning, 'string');
