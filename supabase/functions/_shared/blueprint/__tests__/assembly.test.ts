@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assembleProductBlueprint, sha256Hex } from '../assembly.ts';
+import { assembleProductBlueprint, finalizeBlueprintProduct, sha256Hex } from '../assembly.ts';
 import { canonicalJson } from '../evidence-canonical.ts';
 import { validBlueprint, validModelOutput } from './helpers.ts';
 import type { PreparedEvidence } from '../evidence-types.ts';
-import type { BlueprintPasses, StoredPassOutput } from '../runtime.ts';
+import type { BlueprintPasses } from '../runtime.ts';
 import type { BlueprintResultIdentity } from '../result-store.ts';
 import type { PassRecord } from '../contract.ts';
 
@@ -16,7 +16,7 @@ const passCKeys = ['implementation','testing','risks'];
 
 function splitPasses(value: Record<string, unknown> = model as unknown as Record<string, unknown>): BlueprintPasses {
   return {
-    A: Object.fromEntries(passAKeys.map((key) => [key, value[key]])) as unknown as StoredPassOutput & BlueprintPasses['A'],
+    A: Object.fromEntries(passAKeys.map((key) => [key, value[key]])) as unknown as BlueprintPasses['A'],
     B: Object.fromEntries(passBKeys.map((key) => [key, value[key]])) as unknown as BlueprintPasses['B'],
     C: Object.fromEntries(passCKeys.map((key) => [key, value[key]])) as unknown as BlueprintPasses['C'],
   };
@@ -99,4 +99,47 @@ test('rejects missing passes and invalid merged model output', async () => {
     passes: splitPasses(invalidModel), passRecords,
   });
   assert.deepEqual(invalid, { ok: false, reason: 'verification_failed' });
+});
+
+
+test('finalizer receives only a verified complete blueprint and is not called for rejected output', async () => {
+  let calls = 0;
+  const stored = {
+    id: '66666666-6666-4666-8666-666666666666',
+    created_at: '2026-11-18T12:00:00.000Z',
+    blueprint: source,
+  };
+  const resultStore = {
+    finalize: async (_identity: BlueprintResultIdentity, reservationId: string, blueprint: typeof source) => {
+      calls++;
+      assert.equal(reservationId, '44444444-4444-4444-8444-444444444444');
+      assert.equal(blueprint.verification.status, 'verified');
+      return stored;
+    },
+  } as unknown as import('../result-store.ts').BlueprintResultStore;
+
+  const completed = await finalizeBlueprintProduct({
+    identity,
+    reservationId: '44444444-4444-4444-8444-444444444444',
+    request: source.meta.request_params,
+    evidence,
+    passes: splitPasses(),
+    passRecords,
+    resultStore,
+    createId: () => '55555555-5555-4555-8555-555555555555',
+  });
+  assert.equal(completed?.id, stored.id);
+  assert.equal(calls, 1);
+
+  const rejected = await finalizeBlueprintProduct({
+    identity,
+    reservationId: '44444444-4444-4444-8444-444444444444',
+    request: source.meta.request_params,
+    evidence,
+    passes: splitPasses({ ...(model as unknown as Record<string, unknown>), schema_version: 'wrong' }),
+    passRecords,
+    resultStore,
+  });
+  assert.equal(rejected, null);
+  assert.equal(calls, 1);
 });
