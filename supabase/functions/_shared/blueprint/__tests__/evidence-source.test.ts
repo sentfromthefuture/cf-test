@@ -40,7 +40,7 @@ test('buildEvidenceInputFromRows', async (t) => {
     const result = buildEvidenceInputFromRows({
       cluster, memberships: [{ record_id: 'record-1' }], records: [record], signals: [],
     });
-    expect(result.ok).toBe(true);
+    assert.equal(result.ok, true);
     if (result.ok) assert.equal(result.input.members[0].signal, null);
   });
 
@@ -51,7 +51,7 @@ test('buildEvidenceInputFromRows', async (t) => {
   });
 
   await t.test('rejects duplicate signal rows instead of selecting one nondeterministically', () => {
-    expect(buildEvidenceInputFromRows({
+    assert.deepEqual(buildEvidenceInputFromRows({
       cluster, memberships: [{ record_id: 'record-1' }], records: [record], signals: [signal, signal],
     }), { ok: false, error: 'duplicate_signal' });
   });
