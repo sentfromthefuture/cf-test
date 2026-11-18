@@ -204,11 +204,11 @@ Deno.serve(async (req) => {
   const prepared = prepareEvidencePack(mapped.input);
   if (!prepared.ok) return deny(req, 'research_evidence_invalid', 422);
 
-  const dailyLimit = readDailyBlueprintLimit(Deno.env.get('BLUEPRINT_DAILY_LIMIT'));
+  // Start with a deliberately conservative per-user allowance until an explicit product quota is configured.\n  const dailyLimit = readDailyBlueprintLimit(Deno.env.get('BLUEPRINT_DAILY_LIMIT') || '1');
   if (dailyLimit === null) return deny(req, 'blueprint_quota_not_configured', 503);
 
   const apiKey = Deno.env.get('OPENROUTER_API_KEY') || '';
-  const model = Deno.env.get('BLUEPRINT_MODEL') || BLUEPRINT_DEFAULT_MODEL;
+  // Reuse the project's existing OpenRouter model secret; allow a Blueprint-specific override.\n  const model = Deno.env.get('BLUEPRINT_MODEL') || Deno.env.get('OPENROUTER_MODEL') || BLUEPRINT_DEFAULT_MODEL;
   const timeoutRaw = Deno.env.get('BLUEPRINT_PASS_TIMEOUT_MS') || '90000';
   const timeoutMs = /^\d+$/.test(timeoutRaw) ? Number(timeoutRaw) : NaN;
   const provider = { apiKey, model, timeoutMs };
