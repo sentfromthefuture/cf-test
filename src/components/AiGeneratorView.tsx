@@ -50,12 +50,13 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
       if (!auth.session) throw new Error('Please sign in before generating a Blueprint.');
       const requestKey = globalThis.crypto?.randomUUID?.();
       if (!requestKey) throw new Error('Secure request IDs are not supported by this browser.');
+      // Values must match the backend-owned Blueprint v1 enums in _shared/blueprint/constants.ts.
       const params = {
         team_size: 'solo',
-        budget_band: budget.startsWith('<') ? 'under_1k' : budget.startsWith('$1,000') ? '1k_5k' : '5k_20k',
-        preferred_stack: technology.startsWith('Python') ? 'python' : technology.startsWith('Mobile') ? 'mobile_first' : 'javascript_typescript',
-        business_model_hint: businessModel.startsWith('B2B') ? 'saas_subscription' : businessModel.startsWith('Freemium') ? 'one_time_purchase' : businessModel.startsWith('Usage') ? 'usage_based' : 'not_sure',
-        target_region: country.startsWith('European') ? 'europe' : country.startsWith('Latin') ? 'latin_america' : country.startsWith('Asia') ? 'asia_pacific' : country.startsWith('Canada') ? 'north_america' : 'global',
+        budget_band: budget.startsWith('<') ? 'bootstrap' : budget.startsWith('$1,000') ? 'small' : 'funded',
+        preferred_stack: technology.startsWith('Python') ? 'python_postgres' : technology.startsWith('No-code') ? 'low_code' : 'typescript_postgres',
+        business_model_hint: businessModel.startsWith('B2B') ? 'b2b_saas' : businessModel.startsWith('B2C') ? 'b2c_subscription' : businessModel.startsWith('Marketplace') ? 'marketplace' : businessModel.startsWith('Usage') ? 'api_usage_based' : 'unspecified',
+        target_region: country.startsWith('European') ? 'europe' : country.startsWith('Latin') ? 'latin_america' : country.startsWith('Asia') ? 'asia_pacific' : country.startsWith('African') ? 'africa' : country.startsWith('Middle East') ? 'middle_east' : country.startsWith('Canada') || country.startsWith('United States') ? 'north_america' : 'global',
       };
       for (let attempt = 0; attempt < 12; attempt++) {
         const { data, error } = await supabase.functions.invoke('blueprint', {
