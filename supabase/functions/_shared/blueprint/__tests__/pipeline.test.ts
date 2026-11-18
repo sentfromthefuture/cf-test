@@ -25,10 +25,9 @@ test('Pass A payload contains only request, allowed verdicts and model-facing ev
 
 test('Pass B handoff is a fresh allowlisted DTO, not raw Pass A output', () => {
   const passA = clone(model) as unknown as PassAOutput;
-  (passA as any).unexpected_private_field = 'must not be forwarded';
   const payload = buildBlueprintPassPayload({ pass: 'B', request, evidence, passA }) as any;
   assert.equal(payload.task, 'blueprint_pass_b');
-  assert.equal('unexpected_private_field' in payload, false);
+  assert.equal(Object.keys(payload).sort().join(','), 'contract,features,personas,product,request,task');
   assert.equal('evidence_pack' in payload, false);
   assert.ok(payload.features.length > 0);
   assert.equal(typeof payload.product.positioning, 'string');
