@@ -55,14 +55,14 @@ function readCachedProviderUsage(value: unknown): BlueprintProviderUsage | null 
     || !optionalNumber(row.reported_cost_usd) || !optionalString(row.served_model)
     || !optionalString(row.provider) || !optionalString(row.response_id) || !integer(row.duration_ms)) return null;
   return {
-    input_tokens: row.input_tokens,
-    output_tokens: row.output_tokens,
+    input_tokens: row.input_tokens as number,
+    output_tokens: row.output_tokens as number,
     reasoning_tokens: row.reasoning_tokens as number | null,
     reported_cost_usd: row.reported_cost_usd as number | null,
     served_model: row.served_model as string | null,
     provider: row.provider as string | null,
     response_id: row.response_id as string | null,
-    duration_ms: row.duration_ms,
+    duration_ms: row.duration_ms as number,
   };
 }
 
