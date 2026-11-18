@@ -103,7 +103,7 @@ export function buildBlueprintPassPayload(input: BlueprintPassInput): unknown {
       component_id: c.component_id, name: c.name, feature_ids: c.feature_ids,
     })),
     tables: tables.map((t) => ({ name: t.name, feature_ids: t.feature_ids })),
-    evidence_gaps: (a.market_evidence as Record<string, unknown>).evidence_gaps as Array<Record<string, unknown>>,
+    evidence_gaps: ((a.market_evidence as Record<string, unknown>).evidence_gaps as Array<Record<string, unknown>>).map((g) => g.description),
   };
 }
 
