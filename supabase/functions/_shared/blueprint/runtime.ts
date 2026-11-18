@@ -62,7 +62,8 @@ export async function runBlueprintStep(
   const configVersion = options.configVersion ?? BLUEPRINT_CONFIG_VERSION;
   const passes: BlueprintPasses = {};
   let upstreamA: string | undefined;
-  let upstreamB: string | undefined;\n  const passRecords: PassRecord[] = [];
+  let upstreamB: string | undefined;
+  const passRecords: PassRecord[] = [];
 
   for (const pass of PASS_ORDER) {
     const inputHash = await aiInputHash({
@@ -73,7 +74,8 @@ export async function runBlueprintStep(
       upstream: pass === 'A' ? null : pass === 'B' ? { A: upstreamA } : { A: upstreamA, B: upstreamB },
     });
     const key: AiCacheKey = { task: 'blueprint', model: provider.model, configVersion, hash: inputHash };
-    let liveUsage: BlueprintProviderUsage | null = null;\n    const outcome: CachedOutcome<StoredPassOutput> = await cachedCompute(
+    let liveUsage: BlueprintProviderUsage | null = null;
+    const outcome: CachedOutcome<StoredPassOutput> = await cachedCompute(
       store,
       key,
       async () => {
@@ -83,7 +85,8 @@ export async function runBlueprintStep(
           ...(passes.A ? { passA: passes.A } : {}),
           ...(passes.B ? { passB: passes.B } : {}),
         });
-        liveUsage = result.provider.usage;\n        const output = result.output as StoredPassOutput;
+        liveUsage = result.provider.usage;
+        const output = result.output as StoredPassOutput;
         return {
           value: output,
           result: { pass, output },
@@ -106,7 +109,15 @@ export async function runBlueprintStep(
     if (outcome.status === 'computed' && outcome.stored !== true) {
       return { state: 'deferred', pass, reason: 'pass_result_not_durable', passes };
     }
-    passRecords.push({\n      pass, cache_id: outcome.cacheId, input_hash: inputHash,\n      served_model: liveUsage?.served_model ?? null, provider: liveUsage?.provider ?? null, finish_reason: null,\n      prompt_tokens: liveUsage?.input_tokens ?? 0, completion_tokens: liveUsage?.output_tokens ?? 0,\n      reasoning_tokens: liveUsage?.reasoning_tokens ?? null, reported_cost_usd: liveUsage?.reported_cost_usd ?? null,\n      duration_ms: liveUsage?.duration_ms ?? 0, from_cache: outcome.status === 'hit',\n    });\n\n    if (pass === 'A') {
+    passRecords.push({
+      pass, cache_id: outcome.cacheId, input_hash: inputHash,
+      served_model: liveUsage?.served_model ?? null, provider: liveUsage?.provider ?? null, finish_reason: null,
+      prompt_tokens: liveUsage?.input_tokens ?? 0, completion_tokens: liveUsage?.output_tokens ?? 0,
+      reasoning_tokens: liveUsage?.reasoning_tokens ?? null, reported_cost_usd: liveUsage?.reported_cost_usd ?? null,
+      duration_ms: liveUsage?.duration_ms ?? 0, from_cache: outcome.status === 'hit',
+    });
+
+    if (pass === 'A') {
       passes.A = output as PassAOutput;
       upstreamA = await aiInputHash(output);
     } else if (pass === 'B') {
