@@ -39,6 +39,49 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
   const [blueprintStatus, setBlueprintStatus] = useState('');
   const [blueprintError, setBlueprintError] = useState<string | null>(null);
   const [blueprintLoading, setBlueprintLoading] = useState(false);
+  const generateBlueprint = async () => {
+    if (!clusterId) { setBlueprintError('Select a real collected opportunity first.'); return; }
+    setBlueprintLoading(true);
+    setBlueprint(null);
+    setBlueprintError(null);
+    setBlueprintStatus('Starting evidence-grounded Blueprint…');
+    try {
+      const { data: auth } = await supabase.auth.getSession();
+      if (!auth.session) throw new Error('Please sign in before generating a Blueprint.');
+      const requestKey = globalThis.crypto?.randomUUID?.();
+      if (!requestKey) throw new Error('Secure request IDs are not supported by this browser.');
+      const params = {
+        team_size: 'solo',
+        budget_band: budget.startsWith('<') ? 'under_1k' : budget.startsWith('$1,000') ? '1k_5k' : '5k_20k',
+        preferred_stack: technology.startsWith('Python') ? 'python' : technology.startsWith('Mobile') ? 'mobile_first' : 'javascript_typescript',
+        business_model_hint: businessModel.startsWith('B2B') ? 'saas_subscription' : businessModel.startsWith('Freemium') ? 'one_time_purchase' : businessModel.startsWith('Usage') ? 'usage_based' : 'not_sure',
+        target_region: country.startsWith('European') ? 'europe' : country.startsWith('Latin') ? 'latin_america' : country.startsWith('Asia') ? 'asia_pacific' : country.startsWith('Canada') ? 'north_america' : 'global',
+      };
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const { data, error } = await supabase.functions.invoke('blueprint', {
+          body: { cluster_id: clusterId, request_key: requestKey, params },
+        });
+        if (error) throw new Error(data?.error || error.message || 'Blueprint request failed.');
+        if (data?.status === 'completed' || data?.status === 'completed_now') {
+          setBlueprint(data.result);
+          setBlueprintStatus('Blueprint completed and verified.');
+          return;
+        }
+        if (data?.status === 'in_progress' || data?.status === 'busy' || data?.status === 'cooldown' || data?.status === 'pass_completed') {
+          setBlueprintStatus(data.status === 'in_progress' ? `Completed pass ${data.completed_pass}; continuing with ${data.next_pass}…` : 'Continuing Blueprint generation…');
+          await new Promise((resolve) => setTimeout(resolve, Math.max(2000, (data.retry_after_seconds || 2) * 1000)));
+          continue;
+        }
+        throw new Error(data?.error || data?.status || 'Blueprint generation did not complete.');
+      }
+      throw new Error('Blueprint is taking longer than expected. Please retry.');
+    } catch (err: any) {
+      setBlueprintError(err?.message || 'Blueprint generation failed.');
+    } finally {
+      setBlueprintLoading(false);
+    }
+  };
+
 
   const industryOptions = Array.from(new Set([...industries, 'Retail & Commerce', 'Real Estate & PropTech', 'Freelance & Agency Ops', 'Hospitality & Food Ops', 'Field Services & Trades', 'Regulatory & AI Governance', 'Healthcare & Wellness', 'Developer Tools & DevOps'])).sort((a, b) => a.localeCompare(b));
 
