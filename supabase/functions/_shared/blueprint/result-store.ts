@@ -101,7 +101,7 @@ export class BlueprintResultStore {
     }
 
     const response = await this.fetchImpl(
-      this.config.supabaseUrl.replace(/\\/$/, '') + '/rest/v1/rpc/dr_blueprint_finalize',
+      this.config.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/dr_blueprint_finalize',
       {
         method: 'POST',
         headers: {
