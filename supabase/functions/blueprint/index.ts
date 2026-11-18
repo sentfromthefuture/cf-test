@@ -79,6 +79,25 @@ async function authUser(url: string, anonKey: string, authorization: string): Pr
   return isObject(user) && typeof user.id === 'string' && UUID.test(user.id) ? { id: user.id } : null;
 }
 
+function quotaRpc(url: string, serviceKey: string) {
+  return {
+    async rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
+      const response = await fetch(url.replace(/\\/$/, '') + '/rest/v1/rpc/' + name, {
+        method: 'POST',
+        headers: {
+          apikey: serviceKey,
+          authorization: 'Bearer ' + serviceKey,
+          'content-type': 'application/json',
+          accept: 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
+      if (!response.ok) throw new Error('blueprint_quota_rpc_failed:' + response.status);
+      return await response.json() as T;
+    },
+  };
+}
+
 function serviceHeaders(serviceKey: string) {
   return { apikey: serviceKey, authorization: 'Bearer ' + serviceKey, accept: 'application/json' };
 }
@@ -195,7 +214,7 @@ Deno.serve(async (req) => {
   const provider = { apiKey, model, timeoutMs };
   if (blueprintProviderConfigProblem(provider) !== null) return deny(req, 'blueprint_provider_not_configured', 503);
 
-  const requestParams: BlueprintRequestParams = input.params;
+  const requestParams = input.params as BlueprintRequestParams;
   let requestKeyHash: string;
   try {
     requestKeyHash = await blueprintReservationKey(user.id, input.requestKey, input.clusterId, requestParams);
@@ -220,7 +239,7 @@ Deno.serve(async (req) => {
       evidence: prepared.value,
       allowedVerdicts: [...OPPORTUNITY_VERDICT],
       resultStore,
-      quotaRpc: cacheStore,
+      quotaRpc: quotaRpc(cfg.url, cfg.serviceKey),
       cacheStore,
       provider,
     });
@@ -249,7 +268,6 @@ Deno.serve(async (req) => {
         sufficiency: prepared.value.sufficiency.level,
       }, 202);
     }
-    if (step.state === 'ready_to_assemble') return deny(req, 'blueprint_internal_state_invalid', 500);
     if (step.state === 'busy' || step.state === 'cooldown' || step.state === 'deferred') {
       return reply(req, {
         status: step.state,
