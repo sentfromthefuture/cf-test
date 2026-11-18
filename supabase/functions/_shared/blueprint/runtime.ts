@@ -101,6 +101,11 @@ export async function runBlueprintStep(
 
     const output = asPass(pass, outcome.value);
     if (!output) return { state: 'deferred', pass, reason: 'cached_pass_failed_validation', passes };
+    // A computed pass is usable only when its cache write is durable. Advancing after a failed
+    // write would make retries repeat a paid-in-quota provider call and lose pass continuity.
+    if (outcome.status === 'computed' && outcome.stored !== true) {
+      return { state: 'deferred', pass, reason: 'pass_result_not_durable', passes };
+    }
     if (pass === 'A') {
       passes.A = output as PassAOutput;
       upstreamA = await aiInputHash(output);
