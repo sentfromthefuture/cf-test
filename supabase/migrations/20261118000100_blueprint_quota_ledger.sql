@@ -100,7 +100,17 @@ declare
   v_day date;
   v_status text;
 begin
-  select user_id, day, status into v_user, v_day, v_status
+  -- Read identity first, then take the same user/day lock as reserve, then lock the row.
+  -- This consistent lock order avoids a reservation-row/advisory-lock deadlock.
+  select user_id, day into v_user, v_day
+    from public.dr_blueprint_reservations
+   where id = p_reservation and expires_at > now();
+
+  if not found then return false; end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(v_user::text || ':' || v_day::text, 0));
+
+  select status into v_status
     from public.dr_blueprint_reservations
    where id = p_reservation and expires_at > now()
    for update;
@@ -108,8 +118,6 @@ begin
   if not found then return false; end if;
   if v_status = 'committed' then return true; end if;
   if v_status <> 'reserved' then return false; end if;
-
-  perform pg_advisory_xact_lock(hashtextextended(v_user::text || ':' || v_day::text, 0));
 
   insert into public.dr_blueprint_usage (user_id, day, committed)
   values (v_user, v_day, 1)
