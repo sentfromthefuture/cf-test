@@ -84,6 +84,63 @@ export class BlueprintResultStore {
     return { id: value.id, created_at: value.created_at, blueprint: validated.value };
   }
 
+  /**
+   * Atomically inserts the completed blueprint and commits its quota reservation in one database transaction.
+   * If the response is lost after commit, a retry can read the result before touching quota.
+   */
+  async finalize(
+    identity: BlueprintResultIdentity,
+    reservationId: string,
+    blueprint: ProductBlueprintV1,
+  ): Promise<StoredBlueprintResult> {
+    this.assertIdentity(identity);
+    if (!UUID.test(reservationId)
+      || blueprint.meta.contract_version !== 'product-blueprint.v1'
+      || !SHA256.test(blueprint.meta.evidence_pack.pack_sha256)) {
+      throw new TypeError('invalid_blueprint_finalization');
+    }
+
+    const response = await this.fetchImpl(
+      this.config.supabaseUrl.replace(/\\/$/, '') + '/rest/v1/rpc/dr_blueprint_finalize',
+      {
+        method: 'POST',
+        headers: {
+          apikey: this.config.serviceRoleKey,
+          authorization: 'Bearer ' + this.config.serviceRoleKey,
+          'content-type': 'application/json',
+          accept: 'application/json',
+        },
+        body: JSON.stringify({
+          p_reservation: reservationId,
+          p_user: identity.userId,
+          p_cluster: identity.clusterId,
+          p_request_key_hash: identity.requestKeyHash,
+          p_request_params: identity.requestParams,
+          p_schema_version: blueprint.meta.contract_version,
+          p_model: identity.model,
+          p_config_version: identity.configVersion,
+          p_evidence_pack_sha256: blueprint.meta.evidence_pack.pack_sha256,
+          p_blueprint: blueprint,
+        }),
+      },
+    );
+    if (!response.ok) throw new Error('blueprint_atomic_finalize_failed:' + response.status);
+    const result: unknown = await response.json();
+    if (typeof result !== 'object' || result === null || Array.isArray(result)
+      || (result as Record<string, unknown>).status !== 'completed'
+      || typeof (result as Record<string, unknown>).id !== 'string'
+      || !UUID.test((result as Record<string, unknown>).id as string)
+      || typeof (result as Record<string, unknown>).created_at !== 'string') {
+      throw new Error('blueprint_atomic_finalize_invalid_response');
+    }
+
+    const stored = await this.get(identity);
+    if (!stored || stored.id !== (result as Record<string, unknown>).id) {
+      throw new Error('blueprint_atomic_finalize_result_unavailable');
+    }
+    return stored;
+  }
+
   async save(identity: BlueprintResultIdentity, blueprint: ProductBlueprintV1): Promise<{ id: string; created_at: string }> {
     this.assertIdentity(identity);
     if (blueprint.meta.contract_version !== 'product-blueprint.v1'
