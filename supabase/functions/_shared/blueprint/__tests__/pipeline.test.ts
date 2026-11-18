@@ -6,6 +6,8 @@ import type { PreparedEvidence } from '../evidence.ts';
 import type { PassAOutput, PassBOutput, BlueprintRequestParams } from '../contract.ts';
 
 const model = validModelOutput();
+const passAOnly = () => Object.fromEntries(['schema_version','opportunity','market_evidence','personas','product','mvp','journeys','workflows','commercial'].map(k => [k, (model as any)[k]]));
+const passBOnly = () => Object.fromEntries(['architecture','database'].map(k => [k, (model as any)[k]]));
 const request: BlueprintRequestParams = {
   team_size: 'solo', budget_band: 'bootstrap', preferred_stack: 'typescript_postgres',
   business_model_hint: 'b2b_saas', target_region: 'africa',
@@ -24,7 +26,7 @@ test('Pass A payload contains only request, allowed verdicts and model-facing ev
 });
 
 test('Pass B handoff is a fresh allowlisted DTO, not raw Pass A output', () => {
-  const passA = clone(model) as unknown as PassAOutput;
+  const passA = clone(passAOnly()) as unknown as PassAOutput;
   const payload = buildBlueprintPassPayload({ pass: 'B', request, evidence, passA }) as any;
   assert.equal(payload.task, 'blueprint_pass_b');
   assert.equal(Object.keys(payload).sort().join(','), 'contract,features,personas,product,request,task');
@@ -34,8 +36,8 @@ test('Pass B handoff is a fresh allowlisted DTO, not raw Pass A output', () => {
 });
 
 test('Pass C handoff uses component/table IDs and evidence-gap descriptions only', () => {
-  const passA = clone(model) as unknown as PassAOutput;
-  const passB = clone(model) as unknown as PassBOutput;
+  const passA = clone(passAOnly()) as unknown as PassAOutput;
+  const passB = clone(passBOnly()) as unknown as PassBOutput;
   const payload = buildBlueprintPassPayload({ pass: 'C', request, evidence, passA, passB }) as any;
   assert.equal(payload.task, 'blueprint_pass_c');
   assert.ok(payload.components.length > 0);
@@ -46,5 +48,5 @@ test('Pass C handoff uses component/table IDs and evidence-gap descriptions only
 
 test('later passes require their upstream output', () => {
   assert.throws(() => buildBlueprintPassPayload({ pass: 'B', request, evidence }), /missing_upstream_pass/);
-  assert.throws(() => buildBlueprintPassPayload({ pass: 'C', request, evidence, passA: clone(model) as unknown as PassAOutput }), /missing_upstream_pass/);
+  assert.throws(() => buildBlueprintPassPayload({ pass: 'C', request, evidence, passA: clone(passAOnly()) as unknown as PassAOutput }), /missing_upstream_pass/);
 });
