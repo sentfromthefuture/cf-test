@@ -10,7 +10,7 @@ const reservation = '33333333-3333-4333-8333-333333333333';
 const params = {
   team_size: 'solo', budget_band: 'bootstrap', preferred_stack: 'typescript_postgres',
   business_model_hint: 'b2b_saas', target_region: 'global',
-};
+} as const;
 
 test('Blueprint quota adapter', async (t) => {
   await t.test('derives a stable 64-character key bound to identity, cluster and params', async () => {
