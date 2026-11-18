@@ -4,3 +4,7 @@ project_id = "wgoiukbgrdyjvfpqaipp"
 # so the platform-level JWT check must be off.
 [functions.collect]
 verify_jwt = false
+
+# Blueprint uses an end-user JWT; unlike the scheduler-only collector, platform JWT verification stays enabled.
+[functions.blueprint]
+verify_jwt = true
