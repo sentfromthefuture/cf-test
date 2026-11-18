@@ -1,15 +1,20 @@
 // Blueprint Edge Function boundary (B9).
-// Authenticates and authorises the caller, then performs a read-only evidence-preparation check.
-// Provider execution and quota reservation intentionally remain disabled until privacy review is cleared
-// and the separate Blueprint quota migration has been applied to the hosted database.
-import { TEAM_SIZE, BUDGET_BAND, PREFERRED_STACK, BUSINESS_MODEL_HINT, TARGET_REGION } from '../_shared/blueprint/constants.ts';
+// Authenticates and authorises the caller, prepares a bounded evidence pack, then runs the retry-safe
+// A/B/C generation lifecycle with cache, quota reservation, backend verification and atomic persistence.
+import { TEAM_SIZE, BUDGET_BAND, PREFERRED_STACK, BUSINESS_MODEL_HINT, TARGET_REGION, OPPORTUNITY_VERDICT } from '../_shared/blueprint/constants.ts';
 import { buildEvidenceInputFromRows } from '../_shared/blueprint/evidence-source.ts';
 import { prepareEvidencePack } from '../_shared/blueprint/evidence.ts';
-import { checkBlueprintEntitlement } from '../_shared/blueprint/access.ts';
+import { checkBlueprintEntitlement, readDailyBlueprintLimit } from '../_shared/blueprint/access.ts';
+import type { BlueprintRequestParams } from '../_shared/blueprint/contract.ts';
+import { BlueprintResultStore } from '../_shared/blueprint/result-store.ts';
+import { blueprintReservationKey } from '../_shared/blueprint/quota.ts';
+import { runBlueprintGeneration } from '../_shared/blueprint/service.ts';
+import { BLUEPRINT_CONFIG_VERSION } from '../_shared/blueprint/runtime.ts';
+import { BLUEPRINT_DEFAULT_MODEL, blueprintProviderConfigProblem, BlueprintProviderError } from '../_shared/blueprint/provider.ts';
+import { SupabaseStore } from '../_shared/collector/store.ts';
 
 declare const Deno: { env: { get(name: string): string | undefined }; serve(handler: (request: Request) => Response | Promise<Response>): void };
 
-const PROVIDER_EXECUTION_ENABLED = false;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UUID_LIST_BATCH = 100;
 const PAGE_SIZE = 1000;
@@ -180,20 +185,87 @@ Deno.serve(async (req) => {
   const prepared = prepareEvidencePack(mapped.input);
   if (!prepared.ok) return deny(req, 'research_evidence_invalid', 422);
 
-  // This endpoint deliberately stops before reservation/provider execution. No excerpts are returned to the client.
-  // The separate quota migration is not yet applied to the hosted DB, and privacy review has not cleared third-party text for ERNIE.
-  if (!PROVIDER_EXECUTION_ENABLED) {
-    return reply(req, {
-      status: 'privacy_review_required',
-      message: 'Blueprint evidence preparation is available; model generation is not enabled yet.',
-      cluster_id: input.clusterId,
-      request_key: input.requestKey,
-      request_params: input.params,
-      evidence: prepared.value.summary,
-      sufficiency: prepared.value.sufficiency.level,
-      entitlement: entitlement.plan,
-      generation_enabled: false,
-    }, 503);
+  const dailyLimit = readDailyBlueprintLimit(Deno.env.get('BLUEPRINT_DAILY_LIMIT'));
+  if (dailyLimit === null) return deny(req, 'blueprint_quota_not_configured', 503);
+
+  const apiKey = Deno.env.get('OPENROUTER_API_KEY') || '';
+  const model = Deno.env.get('BLUEPRINT_MODEL') || BLUEPRINT_DEFAULT_MODEL;
+  const timeoutRaw = Deno.env.get('BLUEPRINT_PASS_TIMEOUT_MS') || '90000';
+  const timeoutMs = /^\\d+$/.test(timeoutRaw) ? Number(timeoutRaw) : NaN;
+  const provider = { apiKey, model, timeoutMs };
+  if (blueprintProviderConfigProblem(provider) !== null) return deny(req, 'blueprint_provider_not_configured', 503);
+
+  const requestParams: BlueprintRequestParams = input.params;
+  let requestKeyHash: string;
+  try {
+    requestKeyHash = await blueprintReservationKey(user.id, input.requestKey, input.clusterId, requestParams);
+  } catch {
+    return deny(req, 'request_identity_invalid', 400);
   }
-  return deny(req, 'blueprint_generation_disabled', 503);
+
+  try {
+    const resultStore = new BlueprintResultStore({ supabaseUrl: cfg.url, serviceRoleKey: cfg.serviceKey });
+    const cacheStore = new SupabaseStore(cfg.url, cfg.serviceKey);
+    const result = await runBlueprintGeneration({
+      identity: {
+        userId: user.id,
+        clusterId: input.clusterId,
+        requestKeyHash,
+        requestParams,
+        model,
+        configVersion: BLUEPRINT_CONFIG_VERSION,
+      },
+      dailyLimit,
+      request: requestParams,
+      evidence: prepared.value,
+      allowedVerdicts: [...OPPORTUNITY_VERDICT],
+      resultStore,
+      quotaRpc: cacheStore,
+      cacheStore,
+      provider,
+    });
+
+    if (result.state === 'completed' || result.state === 'completed_now') {
+      return reply(req, {
+        status: 'completed',
+        reused: result.reused,
+        result: result.result,
+      });
+    }
+    if (result.state === 'limit_reached') return deny(req, 'blueprint_daily_limit_reached', 429);
+    if (result.state === 'integrity_error') return deny(req, 'blueprint_integrity_error', 500);
+    if (result.state === 'finalization_deferred') {
+      return reply(req, { status: 'finalization_deferred', retryable: false }, 422);
+    }
+
+    const step = result.step;
+    if (step.state === 'pass_completed') {
+      return reply(req, {
+        status: 'in_progress',
+        completed_pass: step.completed,
+        next_pass: step.next,
+        retry_after_seconds: 2,
+        evidence: prepared.value.summary,
+        sufficiency: prepared.value.sufficiency.level,
+      }, 202);
+    }
+    if (step.state === 'ready_to_assemble') return deny(req, 'blueprint_internal_state_invalid', 500);
+    if (step.state === 'busy' || step.state === 'cooldown' || step.state === 'deferred') {
+      return reply(req, {
+        status: step.state,
+        pass: step.pass,
+        ...(step.reason ? { reason: step.reason } : {}),
+        retry_after_seconds: step.state === 'busy' ? 3 : step.state === 'cooldown' ? 15 : 30,
+      }, step.state === 'deferred' ? 503 : 202);
+    }
+    return deny(req, 'blueprint_unexpected_state', 500);
+  } catch (error) {
+    if (error instanceof BlueprintProviderError) {
+      const status = error.code === 'rate_limited' ? 429
+        : error.code === 'timeout' || error.code === 'network' || error.code === 'provider_unavailable' ? 503 : 502;
+      return reply(req, { error: 'blueprint_provider_' + error.code, retryable: status === 429 || status === 503 }, status);
+    }
+    // Keep request text, source excerpts, provider bodies and credentials out of HTTP errors.
+    return deny(req, 'blueprint_generation_unavailable', 503);
+  }
 });
