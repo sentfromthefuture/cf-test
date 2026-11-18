@@ -210,7 +210,8 @@ Deno.serve(async (req) => {
   const apiKey = Deno.env.get('OPENROUTER_API_KEY') || '';
   // Reuse the existing OpenRouter model secret; allow a Blueprint-specific override.
   const model = Deno.env.get('BLUEPRINT_MODEL') || Deno.env.get('OPENROUTER_MODEL') || BLUEPRINT_DEFAULT_MODEL;
-  const timeoutRaw = Deno.env.get('BLUEPRINT_PASS_TIMEOUT_MS') || '90000';
+  // Keep one provider pass below Supabase's synchronous Edge request deadline.
+  const timeoutRaw = Deno.env.get('BLUEPRINT_PASS_TIMEOUT_MS') || '30000';
   const timeoutMs = /^\d+$/.test(timeoutRaw) ? Number(timeoutRaw) : NaN;
   const provider = { apiKey, model, timeoutMs };
   if (blueprintProviderConfigProblem(provider) !== null) return deny(req, 'blueprint_provider_not_configured', 503);
