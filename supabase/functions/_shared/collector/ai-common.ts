@@ -174,7 +174,7 @@ export interface Computed<T> {
 }
 
 export type CachedOutcome<T> =
-  | { status: 'hit'; value: T; cacheId: string }
+  | { status: 'hit'; value: T; cacheId: string; usage: unknown }
   /**
    * A live answer was obtained. `stored` says whether it is now durable in the cache. When it is not, `notStored` says why:
    * 'write_failed' (the cache store errored; the lease was released) or 'lease_lost' (another worker holds a newer lease or already
@@ -216,7 +216,7 @@ export async function cachedCompute<T>(
     }
     if (b.state === 'hit') {
       const value = revive(b.result);
-      if (value !== null) return { status: 'hit', value, cacheId: b.id };
+      if (value !== null) return { status: 'hit', value, cacheId: b.id, usage: b.usage };
       // A stored result that no longer validates (schema drift, manual edit): drop it and recompute exactly once.
       o.log?.warn('cached AI result failed validation; invalidating it', { task: key.task });
       try {
