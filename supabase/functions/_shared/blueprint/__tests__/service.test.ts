@@ -57,7 +57,7 @@ class MemoryCache implements AiCacheStore {
     this.leases.delete(key);
     return true;
   }
-  async aiCacheFail(lease: AiLease): Promise<void> {
+  async aiCacheFail(lease: AiLease, _reason: string): Promise<void> {
     for (const [key, value] of this.leases) if (value.id === lease.id) this.leases.delete(key);
   }
   async aiCacheAbandon(lease: AiLease): Promise<void> { await this.aiCacheFail(lease, 'abandoned'); }
@@ -143,10 +143,11 @@ test('full synthetic A/B/C retry lifecycle verifies, assembles and atomically fi
   assert.equal(reservations, 4);
   assert.equal(finalizations, 1);
   assert.deepEqual(providerCalls, ['blueprint_pass_a', 'blueprint_pass_b', 'blueprint_pass_c']);
-  assert.ok(saved);
-  assert.deepEqual(saved.blueprint.meta.passes.map((pass) => pass.pass), ['A', 'B', 'C']);
-  assert.ok(saved.blueprint.meta.passes.every((pass) => pass.from_cache));
-  assert.ok(saved.blueprint.meta.passes.every((pass) => pass.provider === 'synthetic-provider'));
-  assert.ok(saved.blueprint.meta.passes.every((pass) => pass.prompt_tokens === 10 && pass.completion_tokens === 20));
-  assert.ok(saved.blueprint.meta.passes.every((pass) => pass.reasoning_tokens === 3 && pass.reported_cost_usd === 0.002));
+  const persisted = saved as StoredBlueprintResult | null;
+  assert.ok(persisted);
+  assert.deepEqual(persisted.blueprint.meta.passes.map((pass) => pass.pass), ['A', 'B', 'C']);
+  assert.ok(persisted.blueprint.meta.passes.every((pass) => pass.from_cache));
+  assert.ok(persisted.blueprint.meta.passes.every((pass) => pass.provider === 'synthetic-provider'));
+  assert.ok(persisted.blueprint.meta.passes.every((pass) => pass.prompt_tokens === 10 && pass.completion_tokens === 20));
+  assert.ok(persisted.blueprint.meta.passes.every((pass) => pass.reasoning_tokens === 3 && pass.reported_cost_usd === 0.002));
 });
