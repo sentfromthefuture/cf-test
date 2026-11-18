@@ -156,7 +156,7 @@ async function loadClusterEvidence(url: string, serviceKey: string, clusterId: s
   return { ok: true as const, rows: { cluster: clusters[0], memberships, records, signals } };
 }
 
-Deno.serve(async (req) => {
+const BLUEPRINT_DAILY_LIMIT = readDailyBlueprintLimit(Deno.env.get('BLUEPRINT_DAILY_LIMIT') || '1') ?? 1;\nconst BLUEPRINT_MODEL = Deno.env.get('BLUEPRINT_MODEL') || Deno.env.get('OPENROUTER_MODEL') || BLUEPRINT_DEFAULT_MODEL;\n\nDeno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(req) });
   if (req.method !== 'POST') return deny(req, 'method_not_allowed', 405);
 
@@ -208,7 +208,7 @@ Deno.serve(async (req) => {
   if (dailyLimit === null) return deny(req, 'blueprint_quota_not_configured', 503);
 
   const apiKey = Deno.env.get('OPENROUTER_API_KEY') || '';
-  const model = Deno.env.get('BLUEPRINT_MODEL') || BLUEPRINT_DEFAULT_MODEL;
+  const model = BLUEPRINT_MODEL;
   const timeoutRaw = Deno.env.get('BLUEPRINT_PASS_TIMEOUT_MS') || '90000';
   const timeoutMs = /^\d+$/.test(timeoutRaw) ? Number(timeoutRaw) : NaN;
   const provider = { apiKey, model, timeoutMs };
