@@ -26,7 +26,7 @@ export class BlueprintPassError extends Error {
     public readonly code: 'missing_upstream_pass' | 'invalid_upstream_pass' | 'invalid_model_output',
     public readonly validationCodes: string[] = [],
   ) {
-    super(code);
+    super(validationCodes.length ? `${code}: ${validationCodes.join(', ')}` : code);
     this.name = 'BlueprintPassError';
   }
 }
