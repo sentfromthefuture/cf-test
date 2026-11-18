@@ -78,10 +78,10 @@ test('one reservation spans A/B/C retries and finalization only runs after all p
   let finalized = 0;
   const stored = { id: '33333333-3333-4333-8333-333333333333', created_at: '2026-11-18T00:00:00Z', blueprint: validBlueprint() } as StoredBlueprintResult;
   const resultStore = { get: async () => null } as unknown as BlueprintResultStore;
-  const quotaRpc = { rpc: async (name: string) => {
+  const quotaRpc = { rpc: async <T>(name: string): Promise<T> => {
     assert.equal(name, 'dr_blueprint_reserve');
     reservations++;
-    return { status: 'reserved', reservation_id: '44444444-4444-4444-8444-444444444444', reused: reservations > 1 };
+    return { status: 'reserved', reservation_id: '44444444-4444-4444-8444-444444444444', reused: reservations > 1 } as T;
   } };
   const run = () => runBlueprintLifecycle({
     identity, dailyLimit: 1, resultStore, quotaRpc, cacheStore: cache, provider,
