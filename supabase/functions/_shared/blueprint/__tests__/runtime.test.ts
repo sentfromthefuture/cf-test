@@ -23,7 +23,9 @@ class MemoryStore implements AiCacheStore {
     this.leases.set(key, lease);
     return { state: 'claimed', ...lease };
   }
+  completeResult = true;
   async aiCacheComplete(lease: AiLease, result: Record<string, unknown>): Promise<boolean> {
+    if (!this.completeResult) return false;
     const key = [...this.leases.entries()].find(([, v]) => v.id === lease.id)?.[0];
     if (!key) return false;
     this.entries.set(key, { id: lease.id, result });
@@ -94,4 +96,15 @@ test('cache identity changes when the evidence pack changes', async () => {
   const modified = { ...passA, schema_version: 'different-valid-shape-is-rejected' };
   assert.notDeepEqual(modified, passA);
   assert.equal(keysBefore[0].includes('blueprint'), true);
+});
+
+
+test('does not advance when a live pass could not be durably cached', async () => {
+  const store = new MemoryStore();
+  store.completeResult = false;
+  const calls: string[] = [];
+  const result = await runBlueprintStep(store, providerConfig(calls), { request, evidence, allowedVerdicts: ['validate_first'] });
+  assert.deepEqual(result, { state: 'deferred', pass: 'A', reason: 'pass_result_not_durable', passes: {} });
+  assert.deepEqual(calls, ['blueprint_pass_a']);
+  assert.equal(store.entries.size, 0);
 });
