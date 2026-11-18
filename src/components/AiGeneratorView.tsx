@@ -21,7 +21,7 @@ import {
   FileCheck
 } from 'lucide-react';
 
-export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void; industries?: string[] }> = ({ activePlan, onOpenPricing, industries = [] }) => {
+export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () => void; industries?: string[]; clusterId?: string }> = ({ activePlan, onOpenPricing, industries = [], clusterId }) => {
   const [industry, setIndustry] = useState('Retail & Commerce');
   const [country, setCountry] = useState('United States & Global');
   const [difficulty, setDifficulty] = useState('Medium (2-4 weeks)');
@@ -35,6 +35,10 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
   const [generatedBrief, setGeneratedBrief] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [blueprint, setBlueprint] = useState<any | null>(null);
+  const [blueprintStatus, setBlueprintStatus] = useState('');
+  const [blueprintError, setBlueprintError] = useState<string | null>(null);
+  const [blueprintLoading, setBlueprintLoading] = useState(false);
 
   const industryOptions = Array.from(new Set([...industries, 'Retail & Commerce', 'Real Estate & PropTech', 'Freelance & Agency Ops', 'Hospitality & Food Ops', 'Field Services & Trades', 'Regulatory & AI Governance', 'Healthcare & Wellness', 'Developer Tools & DevOps'])).sort((a, b) => a.localeCompare(b));
 
@@ -178,6 +182,24 @@ Commercial estimates, proposed pricing and product recommendations are hypothese
           </p>
         </div>
       </div>
+
+      <section className="rounded-2xl border border-cyan-800/70 bg-slate-900/70 p-5 md:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="text-sm font-bold text-white">Evidence-grounded Product Blueprint</h2><p className="mt-1 text-xs text-slate-400">Runs the verified A/B/C generation workflow against a collected DemandRadar opportunity.</p></div>
+          <span className="rounded bg-cyan-950 px-2 py-1 text-[11px] font-mono text-cyan-300">OPENROUTER · FREE MODEL</span>
+        </div>
+        <p className="text-xs text-slate-400">{clusterId ? 'A live research cluster is selected.' : 'No live research cluster selected. Choose a collected opportunity first; demo data is not accepted.'}</p>
+        <button type="button" onClick={generateBlueprint} disabled={blueprintLoading || !clusterId} className="rounded-xl bg-cyan-500 px-5 py-2.5 text-xs font-bold text-slate-950 disabled:opacity-40">{blueprintLoading ? 'Generating Blueprint…' : 'Generate Product Blueprint'}</button>
+        {blueprintStatus && <p className="text-xs text-cyan-300">{blueprintStatus}</p>}
+        {blueprintError && <p role="alert" className="text-xs text-rose-300">{blueprintError}</p>}
+        {blueprint && <div className="space-y-3">
+          <div className="rounded-xl border border-emerald-800/60 bg-emerald-950/20 p-3 text-xs text-emerald-200">Verified result · {blueprint.opportunity?.title || blueprint.product?.product_name || 'Product Blueprint'} · {blueprint.meta?.passes?.length || 0} generation passes</div>
+          <div className="rounded-xl border border-slate-700 bg-slate-950 p-4"><h3 className="mb-2 text-xs font-bold text-white">Opportunity</h3><p className="text-sm font-semibold text-cyan-200">{blueprint.opportunity?.title}</p><p className="mt-1 text-xs text-slate-300">{blueprint.opportunity?.one_line_summary}</p><p className="mt-2 text-xs text-slate-400">Verdict: {blueprint.opportunity?.verdict}</p></div>
+          <div className="rounded-xl border border-slate-700 bg-slate-950 p-4"><h3 className="mb-2 text-xs font-bold text-white">Product concept</h3><p className="text-sm font-semibold text-white">{blueprint.product?.product_name}</p><p className="mt-1 text-xs text-slate-300">{blueprint.product?.value_proposition?.text}</p></div>
+          <details className="rounded-xl border border-slate-700 bg-slate-950 p-4"><summary className="cursor-pointer text-xs font-semibold text-slate-200">Full Blueprint JSON</summary><pre className="mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words text-[11px] text-slate-300">{JSON.stringify(blueprint, null, 2)}</pre><button type="button" onClick={() => navigator.clipboard?.writeText(JSON.stringify(blueprint, null, 2))} className="mt-3 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200">Copy full Blueprint JSON</button></details>
+        </div>}
+      </section>
+
 
       {/* Generator Filter Form */}
       <form onSubmit={handleGenerate} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 md:p-6 space-y-5 shadow-xl">
