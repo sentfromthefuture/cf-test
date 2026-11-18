@@ -45,6 +45,27 @@ function usageRecord(usage: BlueprintProviderUsage): Record<string, unknown> {
   return { ...usage };
 }
 
+function readCachedProviderUsage(value: unknown): BlueprintProviderUsage | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const integer = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+  const optionalNumber = (v: unknown) => v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 0);
+  const optionalString = (v: unknown) => v === null || typeof v === 'string';
+  if (!integer(row.input_tokens) || !integer(row.output_tokens) || !optionalNumber(row.reasoning_tokens)
+    || !optionalNumber(row.reported_cost_usd) || !optionalString(row.served_model)
+    || !optionalString(row.provider) || !optionalString(row.response_id) || !integer(row.duration_ms)) return null;
+  return {
+    input_tokens: row.input_tokens,
+    output_tokens: row.output_tokens,
+    reasoning_tokens: row.reasoning_tokens as number | null,
+    reported_cost_usd: row.reported_cost_usd as number | null,
+    served_model: row.served_model as string | null,
+    provider: row.provider as string | null,
+    response_id: row.response_id as string | null,
+    duration_ms: row.duration_ms,
+  };
+}
+
 function nextPass(pass: BlueprintPass): 'B' | 'C' | 'assemble' {
   return pass === 'A' ? 'B' : pass === 'B' ? 'C' : 'assemble';
 }
@@ -109,12 +130,13 @@ export async function runBlueprintStep(
     if (outcome.status === 'computed' && outcome.stored !== true) {
       return { state: 'deferred', pass, reason: 'pass_result_not_durable', passes };
     }
+    const provenanceUsage = liveUsage.value ?? (outcome.status === 'hit' ? readCachedProviderUsage(outcome.usage) : null);
     passRecords.push({
       pass, cache_id: outcome.cacheId, input_hash: inputHash,
-      served_model: liveUsage.value?.served_model ?? null, provider: liveUsage.value?.provider ?? null, finish_reason: null,
-      prompt_tokens: liveUsage.value?.input_tokens ?? 0, completion_tokens: liveUsage.value?.output_tokens ?? 0,
-      reasoning_tokens: liveUsage.value?.reasoning_tokens ?? null, reported_cost_usd: liveUsage.value?.reported_cost_usd ?? null,
-      duration_ms: liveUsage.value?.duration_ms ?? 0, from_cache: outcome.status === 'hit',
+      served_model: provenanceUsage?.served_model ?? null, provider: provenanceUsage?.provider ?? null, finish_reason: null,
+      prompt_tokens: provenanceUsage?.input_tokens ?? 0, completion_tokens: provenanceUsage?.output_tokens ?? 0,
+      reasoning_tokens: provenanceUsage?.reasoning_tokens ?? null, reported_cost_usd: provenanceUsage?.reported_cost_usd ?? null,
+      duration_ms: provenanceUsage?.duration_ms ?? 0, from_cache: outcome.status === 'hit',
     });
 
     if (pass === 'A') {
