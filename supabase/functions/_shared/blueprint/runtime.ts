@@ -74,7 +74,7 @@ export async function runBlueprintStep(
       upstream: pass === 'A' ? null : pass === 'B' ? { A: upstreamA } : { A: upstreamA, B: upstreamB },
     });
     const key: AiCacheKey = { task: 'blueprint', model: provider.model, configVersion, hash: inputHash };
-    let liveUsage: BlueprintProviderUsage | null = null;
+    const liveUsage: { value: BlueprintProviderUsage | null } = { value: null };
     const outcome: CachedOutcome<StoredPassOutput> = await cachedCompute(
       store,
       key,
@@ -85,7 +85,7 @@ export async function runBlueprintStep(
           ...(passes.A ? { passA: passes.A } : {}),
           ...(passes.B ? { passB: passes.B } : {}),
         });
-        liveUsage = result.provider.usage;
+        liveUsage.value = result.provider.usage;
         const output = result.output as StoredPassOutput;
         return {
           value: output,
@@ -111,7 +111,7 @@ export async function runBlueprintStep(
     }
     passRecords.push({
       pass, cache_id: outcome.cacheId, input_hash: inputHash,
-      served_model: liveUsage?.served_model ?? null, provider: liveUsage?.provider ?? null, finish_reason: null,
+      served_model: liveUsage.value?.served_model ?? null, provider: liveUsage?.provider ?? null, finish_reason: null,
       prompt_tokens: liveUsage?.input_tokens ?? 0, completion_tokens: liveUsage?.output_tokens ?? 0,
       reasoning_tokens: liveUsage?.reasoning_tokens ?? null, reported_cost_usd: liveUsage?.reported_cost_usd ?? null,
       duration_ms: liveUsage?.duration_ms ?? 0, from_cache: outcome.status === 'hit',
