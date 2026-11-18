@@ -12,22 +12,22 @@ const passB = Object.fromEntries(['architecture','database'].map(k => [k, model[
 const passC = Object.fromEntries(['implementation','testing','risks'].map(k => [k, model[k]]));
 
 class MemoryStore implements AiCacheStore {
-  entries = new Map<string, { id: string; result: unknown }>();
+  entries = new Map<string, { id: string; result: unknown; usage: unknown }>();
   leases = new Map<string, AiLease>();
   sequence = 0;
   key(k: AiCacheKey) { return [k.task,k.model,k.configVersion,k.hash].join(':'); }
   async aiCacheBegin(k: AiCacheKey, _leaseSeconds: number): Promise<CacheBegin> {
     const key = this.key(k);
     const found = this.entries.get(key);
-    if (found) return { state: 'hit', id: found.id, result: found.result, citations: [], usage: {} };
+    if (found) return { state: 'hit', id: found.id, result: found.result, citations: [], usage: found.usage };
     const lease = { id: String(++this.sequence), epoch: 1 };
     this.leases.set(key, lease);
     return { state: 'claimed', ...lease };
   }
-  async aiCacheComplete(lease: AiLease, result: Record<string, unknown>): Promise<boolean> {
+  async aiCacheComplete(lease: AiLease, result: Record<string, unknown>, _citations: unknown[], usage: Record<string, unknown>): Promise<boolean> {
     const key = [...this.leases.entries()].find(([, value]) => value.id === lease.id)?.[0];
     if (!key) return false;
-    this.entries.set(key, { id: lease.id, result });
+    this.entries.set(key, { id: lease.id, result, usage });
     this.leases.delete(key);
     return true;
   }
@@ -65,7 +65,7 @@ function providerConfig(calls: string[]) {
       const payload = JSON.parse(body.messages[1].content) as { task: string };
       calls.push(payload.task);
       const output = payload.task.endsWith('_a') ? passA : payload.task.endsWith('_b') ? passB : passC;
-      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 10, completion_tokens: 10 } }), { status: 200 });
+      return new Response(JSON.stringify({ id: 'synthetic-response', model: 'baidu/ernie-5.5-flash-preview:free', provider: 'synthetic-provider', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 10, completion_tokens: 10, completion_tokens_details: { reasoning_tokens: 2 }, cost: 0.001 } }), { status: 200 });
     },
   };
 }
@@ -93,6 +93,10 @@ test('one reservation spans A/B/C retries and finalization only runs after all p
       assert.equal(passRecords.length, 3);
       assert.deepEqual(passRecords.map((record) => record.pass), ['A', 'B', 'C']);
       assert.ok(passRecords.every((record) => record.from_cache));
+      assert.ok(passRecords.every((record) => record.served_model === 'baidu/ernie-5.5-flash-preview:free'));
+      assert.ok(passRecords.every((record) => record.provider === 'synthetic-provider'));
+      assert.ok(passRecords.every((record) => record.prompt_tokens === 10 && record.completion_tokens === 10));
+      assert.ok(passRecords.every((record) => record.reasoning_tokens === 2 && record.reported_cost_usd === 0.001));
       return stored;
     },
   });
