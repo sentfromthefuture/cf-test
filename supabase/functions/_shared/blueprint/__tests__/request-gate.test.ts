@@ -20,7 +20,7 @@ test('Blueprint request gate', async (t) => {
     const response = await gateBlueprintRequest({
       identity, dailyLimit: 1,
       resultStore: { get: async () => result },
-      quotaRpc: { rpc: async () => { quotaCalls++; throw new Error('must_not_call_quota'); } },
+      quotaRpc: { rpc: async <T>() => { quotaCalls++; throw new Error('must_not_call_quota'); } },
     });
     assert.deepEqual(response, { state: 'completed', result });
     assert.equal(quotaCalls, 0);
@@ -31,9 +31,9 @@ test('Blueprint request gate', async (t) => {
     const response = await gateBlueprintRequest({
       identity, dailyLimit: 2,
       resultStore: { get: async () => null },
-      quotaRpc: { rpc: async (name, args) => {
+      quotaRpc: { rpc: async <T>(name: string, args: Record<string, unknown>) => {
         calls.push({ name, args });
-        return { status: 'reserved', reservation_id: reservationId, reused: false };
+        return { status: 'reserved', reservation_id: reservationId, reused: false } as T;
       } },
     });
     assert.deepEqual(response, { state: 'reserved', reservationId, reused: false });
@@ -48,7 +48,7 @@ test('Blueprint request gate', async (t) => {
     const response = await gateBlueprintRequest({
       identity, dailyLimit: 1,
       resultStore: { get: async () => null },
-      quotaRpc: { rpc: async () => ({ status: 'limit_reached' }) },
+      quotaRpc: { rpc: async <T>() => ({ status: 'limit_reached' } as T) },
     });
     assert.deepEqual(response, { state: 'limit_reached' });
   });
@@ -57,7 +57,7 @@ test('Blueprint request gate', async (t) => {
     const response = await gateBlueprintRequest({
       identity, dailyLimit: 1,
       resultStore: { get: async () => null },
-      quotaRpc: { rpc: async () => ({ status: 'committed', reservation_id: reservationId, reused: true }) },
+      quotaRpc: { rpc: async <T>() => ({ status: 'committed', reservation_id: reservationId, reused: true } as T) },
     });
     assert.deepEqual(response, { state: 'integrity_error', reason: 'committed_reservation_without_result' });
   });
@@ -67,7 +67,7 @@ test('Blueprint request gate', async (t) => {
     await assert.rejects(() => gateBlueprintRequest({
       identity, dailyLimit: 1,
       resultStore: { get: async () => { throw new Error('storage_unavailable'); } },
-      quotaRpc: { rpc: async () => { quotaCalls++; return { status: 'reserved', reservation_id: reservationId, reused: false }; } },
+      quotaRpc: { rpc: async <T>() => { quotaCalls++; return { status: 'reserved', reservation_id: reservationId, reused: false } as T; } },
     }), /storage_unavailable/);
     assert.equal(quotaCalls, 0);
   });
