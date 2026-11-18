@@ -1,7 +1,8 @@
 // B8: executable, backend-owned verification for the assembled Blueprint.
 // A check is recorded as passed only after the corresponding validator/guard actually runs.
 import { REQUIRED_VERIFICATION_CHECKS } from './constants.ts';
-import type { BlueprintModelOutputV1, EvidencePack, VerificationCheck } from './contract.ts';
+import type { BlueprintModelOutputV1, VerificationCheck } from './contract.ts';
+import type { EvidencePack } from './evidence-types.ts';
 import { buildGroundingContext, checkGeneralisation, checkNameGrounding, checkNumericGrounding, checkRelevanceFloor, checkSupportingGrade, checkWtpEvidence } from './evidence-grounding.ts';
 import { claimSites, refSites } from './validate-evidence.ts';
 import { validateBlueprintModelOutput } from './validate.ts';
