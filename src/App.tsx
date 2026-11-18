@@ -296,7 +296,7 @@ export default function App() {
         )}
 
         {currentTab === 'ai-generator' && (
-          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} industries={overview?.industries.map((item) => item.industry) ?? []} />
+          <AiGeneratorView activePlan={activePlan} onOpenPricing={() => setIsPricingOpen(true)} industries={overview?.industries.map((item) => item.industry) ?? []} clusterId={!isDemo ? selectedOpportunity.live?.clusterId : undefined} />
         )}
       </main>
 
