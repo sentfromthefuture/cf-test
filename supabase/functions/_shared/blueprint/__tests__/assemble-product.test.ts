@@ -23,7 +23,7 @@ test('backend assembly recomputes citation provenance and validates the complete
   const result = await assembleProductBlueprint(input);
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.value.verification.ref_count, result.value.verification.ref_count);
+  assert.ok(result.value.verification.ref_count >= 0);
   assert.equal(result.value.meta.evidence_pack.excerpt_count, result.value.evidence_index.filter((entry) => entry.kind === 'discussion_excerpt').length);
   assert.equal(result.value.meta.evidence_pack.metric_count, result.value.evidence_index.filter((entry) => entry.kind === 'cluster_metric').length);
   for (const entry of result.value.evidence_index) {
