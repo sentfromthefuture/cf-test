@@ -83,7 +83,7 @@ test('one invocation performs at most one live pass; the next invocation reuses 
   assert.deepEqual(calls, ['blueprint_pass_a', 'blueprint_pass_b']);
 });
 
-test('cache identity changes when validated upstream pass output changes', async () => {
+test('cache identity changes when the evidence pack changes', async () => {
   const store = new MemoryStore();
   const calls: string[] = [];
   const config = providerConfig(calls);
