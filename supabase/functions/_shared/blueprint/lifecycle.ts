@@ -5,6 +5,7 @@
 import { gateBlueprintRequest, type BlueprintRequestGateResult } from './request-gate.ts';
 import { releaseBlueprint, type BlueprintQuotaRpc } from './quota.ts';
 import type { BlueprintResultIdentity, BlueprintResultStore, StoredBlueprintResult } from './result-store.ts';
+import type { PassRecord } from './contract.ts';
 import { runBlueprintStep, type BlueprintRuntimeInput, type BlueprintStepResult } from './runtime.ts';
 import type { AiCacheStore } from '../collector/ai-common.ts';
 import type { BlueprintProviderConfig } from './provider.ts';
@@ -30,6 +31,7 @@ export interface BlueprintLifecycleInput {
     identity: BlueprintResultIdentity;
     reservationId: string;
     passes: Extract<BlueprintStepResult, { state: 'ready_to_assemble' }>['passes'];
+    passRecords: PassRecord[];
   }) => Promise<StoredBlueprintResult | null>;
 }
 
@@ -57,6 +59,7 @@ export async function runBlueprintLifecycle(input: BlueprintLifecycleInput): Pro
     identity: input.identity,
     reservationId: gate.reservationId,
     passes: step.passes,
+    passRecords: step.passRecords,
   });
   if (!stored) {
     // A definitive assembly rejection is terminal, unlike a transient provider/cache failure.

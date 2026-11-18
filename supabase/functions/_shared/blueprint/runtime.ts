@@ -4,7 +4,7 @@
 import {
   aiInputHash, cachedCompute, type AiCacheKey, type AiCacheStore, type CachedOutcome,
 } from '../collector/ai-common.ts';
-import type { BlueprintRequestParams, PassAOutput, PassBOutput, PassCOutput } from './contract.ts';
+import type { BlueprintRequestParams, PassAOutput, PassBOutput, PassCOutput, PassRecord } from './contract.ts';
 import type { PreparedEvidence } from './evidence-types.ts';
 import { runBlueprintPass, type BlueprintPass } from './pipeline.ts';
 import type { BlueprintProviderConfig, BlueprintProviderUsage } from './provider.ts';
@@ -24,9 +24,9 @@ export interface BlueprintPasses {
   C?: PassCOutput;
 }
 export type BlueprintStepResult =
-  | { state: 'pass_completed'; completed: BlueprintPass; next: 'B' | 'C' | 'assemble'; from_cache: boolean; passes: BlueprintPasses; cache_id: string; input_hash: string }
+  | { state: 'pass_completed'; completed: BlueprintPass; next: 'B' | 'C' | 'assemble'; from_cache: boolean; passes: BlueprintPasses; passRecords: PassRecord[]; cache_id: string; input_hash: string }
   | { state: 'busy' | 'cooldown' | 'deferred'; pass: BlueprintPass; reason?: string; passes: BlueprintPasses }
-  | { state: 'ready_to_assemble'; passes: BlueprintPasses };
+  | { state: 'ready_to_assemble'; passes: BlueprintPasses; passRecords: PassRecord[] };
 
 const PASS_ORDER: readonly BlueprintPass[] = ['A', 'B', 'C'];
 const asPass = (pass: BlueprintPass, value: unknown): StoredPassOutput | null => {
@@ -63,6 +63,7 @@ export async function runBlueprintStep(
   const passes: BlueprintPasses = {};
   let upstreamA: string | undefined;
   let upstreamB: string | undefined;
+  const passRecords: PassRecord[] = [];
 
   for (const pass of PASS_ORDER) {
     const inputHash = await aiInputHash({
@@ -73,6 +74,7 @@ export async function runBlueprintStep(
       upstream: pass === 'A' ? null : pass === 'B' ? { A: upstreamA } : { A: upstreamA, B: upstreamB },
     });
     const key: AiCacheKey = { task: 'blueprint', model: provider.model, configVersion, hash: inputHash };
+    const liveUsage: { value: BlueprintProviderUsage | null } = { value: null };
     const outcome: CachedOutcome<StoredPassOutput> = await cachedCompute(
       store,
       key,
@@ -83,6 +85,7 @@ export async function runBlueprintStep(
           ...(passes.A ? { passA: passes.A } : {}),
           ...(passes.B ? { passB: passes.B } : {}),
         });
+        liveUsage.value = result.provider.usage;
         const output = result.output as StoredPassOutput;
         return {
           value: output,
@@ -106,6 +109,14 @@ export async function runBlueprintStep(
     if (outcome.status === 'computed' && outcome.stored !== true) {
       return { state: 'deferred', pass, reason: 'pass_result_not_durable', passes };
     }
+    passRecords.push({
+      pass, cache_id: outcome.cacheId, input_hash: inputHash,
+      served_model: liveUsage.value?.served_model ?? null, provider: liveUsage.value?.provider ?? null, finish_reason: null,
+      prompt_tokens: liveUsage.value?.input_tokens ?? 0, completion_tokens: liveUsage.value?.output_tokens ?? 0,
+      reasoning_tokens: liveUsage.value?.reasoning_tokens ?? null, reported_cost_usd: liveUsage.value?.reported_cost_usd ?? null,
+      duration_ms: liveUsage.value?.duration_ms ?? 0, from_cache: outcome.status === 'hit',
+    });
+
     if (pass === 'A') {
       passes.A = output as PassAOutput;
       upstreamA = await aiInputHash(output);
@@ -120,10 +131,10 @@ export async function runBlueprintStep(
     if (outcome.status === 'computed') {
       return {
         state: 'pass_completed', completed: pass, next: nextPass(pass),
-        from_cache: false, passes, cache_id: outcome.cacheId, input_hash: inputHash,
+        from_cache: false, passes, passRecords, cache_id: outcome.cacheId, input_hash: inputHash,
       };
     }
   }
 
-  return { state: 'ready_to_assemble', passes };
+  return { state: 'ready_to_assemble', passes, passRecords };
 }

@@ -86,10 +86,13 @@ test('one reservation spans A/B/C retries and finalization only runs after all p
   const run = () => runBlueprintLifecycle({
     identity, dailyLimit: 1, resultStore, quotaRpc, cacheStore: cache, provider,
     runtimeInput: { request, evidence, allowedVerdicts: ['validate_first'] },
-    finalize: async ({ reservationId, passes }) => {
+    finalize: async ({ reservationId, passes, passRecords }) => {
       finalized++;
       assert.equal(reservationId, '44444444-4444-4444-8444-444444444444');
       assert.ok(passes.A && passes.B && passes.C);
+      assert.equal(passRecords.length, 3);
+      assert.deepEqual(passRecords.map((record) => record.pass), ['A', 'B', 'C']);
+      assert.ok(passRecords.every((record) => record.from_cache));
       return stored;
     },
   });
