@@ -231,7 +231,7 @@ Deno.serve(async (req) => {
         userId: user.id,
         clusterId: input.clusterId,
         requestKeyHash,
-        requestParams,
+        requestParams: { ...requestParams },
         model,
         configVersion: BLUEPRINT_CONFIG_VERSION,
       },
