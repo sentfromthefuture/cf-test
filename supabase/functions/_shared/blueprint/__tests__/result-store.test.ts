@@ -105,4 +105,42 @@ test('Blueprint result store', async (t) => {
     });
     await assert.rejects(() => store.save(identity, validBlueprint() as ProductBlueprintV1), /blueprint_result_persistence_failed:500/);
   });
+  await t.test('atomically finalizes the result and reservation, then re-reads the validated result', async () => {
+    const blueprint = validBlueprint() as ProductBlueprintV1;
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const store = new BlueprintResultStore({
+      supabaseUrl: 'https://example.supabase.co',
+      serviceRoleKey: 'service-role-test',
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url.endsWith('/rpc/dr_blueprint_finalize')) {
+          return new Response(JSON.stringify({
+            status: 'completed', id: clusterId, created_at: '2026-11-18T00:00:00Z',
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify([{
+          id: clusterId, created_at: '2026-11-18T00:00:00Z', blueprint,
+        }]), { status: 200 });
+      },
+    });
+
+    const stored = await store.finalize(identity, '33333333-3333-4333-8333-333333333333', blueprint);
+    assert.equal(stored.id, clusterId);
+    assert.deepEqual(stored.blueprint, blueprint);
+    assert.equal(calls.length, 2);
+    assert.match(calls[0].url, /rpc\/dr_blueprint_finalize$/);
+    assert.equal(calls[0].init?.method, 'POST');
+    const headers = new Headers(calls[0].init?.headers);
+    assert.equal(headers.get('authorization'), 'Bearer service-role-test');
+    const body = JSON.parse(String(calls[0].init?.body));
+    assert.equal(body.p_reservation, '33333333-3333-4333-8333-333333333333');
+    assert.equal(body.p_user, userId);
+    assert.equal(body.p_cluster, clusterId);
+    assert.equal(body.p_request_key_hash, reservationKey);
+    assert.equal(body.p_evidence_pack_sha256, blueprint.meta.evidence_pack.pack_sha256);
+    assert.deepEqual(body.p_blueprint, blueprint);
+    assert.match(calls[1].url, /user_id=eq\./);
+  });
+
 });
