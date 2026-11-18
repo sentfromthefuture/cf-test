@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 import { buildEvidenceInputFromRows } from '../evidence-source.ts';
 
 const cluster = {
@@ -15,14 +16,14 @@ const record = {
 };
 const signal = { record_id: 'record-1', is_problem: true, wtp_evidence: false, analysis_method: 'llm', problem_statement: 'Slow invoice reconciliation' };
 
-describe('buildEvidenceInputFromRows', () => {
-  it('maps only the A3 evidence-input fields and keeps provenance out of model-facing preparation input', () => {
+test('buildEvidenceInputFromRows', async (t) => {
+  await t.test('maps only the A3 evidence-input fields and keeps provenance out of model-facing preparation input', () => {
     const result = buildEvidenceInputFromRows({
       cluster, memberships: [{ cluster_id: 'cluster-1', record_id: 'record-1' }], records: [record], signals: [signal],
     });
-    expect(result.ok).toBe(true);
+    assert.equal(result.ok, true);
     if (!result.ok) return;
-    expect(result.input.members).toEqual([{
+    assert.deepEqual(result.input.members, [{
       record: {
         id: 'record-1', source_id: 'github', discussion_key: 'discussion-1', kind: 'issue',
         url: 'https://example.com/1', title: 'Invoice reconciliation', excerpt: 'Manual reconciliation takes too long.',
@@ -31,27 +32,27 @@ describe('buildEvidenceInputFromRows', () => {
       },
       signal: { is_problem: true, wtp_evidence: false, analysis_method: 'llm' },
     }]);
-    expect(JSON.stringify(result.input)).not.toContain('must-not-leak');
-    expect(JSON.stringify(result.input)).not.toContain('problem_statement');
+    assert.equal(JSON.stringify(result.input).includes('must-not-leak'), false);
+    assert.equal(JSON.stringify(result.input).includes('problem_statement'), false);
   });
 
-  it('preserves a missing signal as null for the evidence validator to account for', () => {
+  await t.test('preserves a missing signal as null for the evidence validator to account for', () => {
     const result = buildEvidenceInputFromRows({
       cluster, memberships: [{ record_id: 'record-1' }], records: [record], signals: [],
     });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.input.members[0].signal).toBeNull();
+    if (result.ok) assert.equal(result.input.members[0].signal, null);
   });
 
-  it('rejects a membership whose raw record is absent instead of dropping it', () => {
-    expect(buildEvidenceInputFromRows({
+  await t.test('rejects a membership whose raw record is absent instead of dropping it', () => {
+    assert.deepEqual(buildEvidenceInputFromRows({
       cluster, memberships: [{ record_id: 'missing' }], records: [], signals: [],
-    })).toEqual({ ok: false, error: 'missing_record' });
+    }), { ok: false, error: 'missing_record' });
   });
 
-  it('rejects duplicate signal rows instead of selecting one nondeterministically', () => {
+  await t.test('rejects duplicate signal rows instead of selecting one nondeterministically', () => {
     expect(buildEvidenceInputFromRows({
       cluster, memberships: [{ record_id: 'record-1' }], records: [record], signals: [signal, signal],
-    })).toEqual({ ok: false, error: 'duplicate_signal' });
+    }), { ok: false, error: 'duplicate_signal' });
   });
 });
