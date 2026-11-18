@@ -52,7 +52,16 @@ export async function runBlueprintLifecycle(input: BlueprintLifecycleInput): Pro
   if (gate.state === 'limit_reached') return gate;
   if (gate.state === 'integrity_error') return gate;
 
-  const step = await runBlueprintStep(input.cacheStore, input.provider, input.runtimeInput);
+  let step: BlueprintStepResult;
+  try {
+    step = await runBlueprintStep(input.cacheStore, input.provider, input.runtimeInput);
+  } catch (error) {
+    // Provider/cache failures are retryable, but this HTTP invocation cannot continue the
+    // reservation itself. Release the pending daily slot; successful cached passes remain
+    // available to a later request, which can reserve a fresh slot and resume safely.
+    await releaseBlueprint(input.quotaRpc, gate.reservationId).catch(() => false);
+    throw error;
+  }
   if (step.state !== 'ready_to_assemble') return { state: 'progress', step };
 
   const stored = await input.finalize({
