@@ -62,7 +62,22 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
         const { data, error } = await supabase.functions.invoke('blueprint', {
           body: { cluster_id: clusterId, request_key: requestKey, params },
         });
-        if (error) throw new Error(data?.error || error.message || 'Blueprint request failed.');
+        if (error) {
+          // FunctionsHttpError carries the non-2xx Response in context.
+          let detail = data?.error || '';
+          let statusCode = '';
+          try {
+            const response = error.context instanceof Response ? error.context.clone() : null;
+            if (response) {
+              statusCode = String(response.status);
+              const payload = await response.json().catch(() => null);
+              if (payload && typeof payload.error === 'string') detail = payload.error;
+              else if (payload && typeof payload.message === 'string') detail = payload.message;
+            }
+          } catch { /* keep the safe SDK fallback */ }
+          const message = detail ? 'Blueprint failed (' + (statusCode || 'HTTP') + '): ' + detail : 'Blueprint request failed: ' + error.message + (statusCode ? ' (HTTP ' + statusCode + ')' : '');
+          throw new Error(message);
+        }
         if (data?.status === 'completed' || data?.status === 'completed_now') {
           setBlueprint(data.result);
           setBlueprintStatus('Blueprint completed and verified.');
