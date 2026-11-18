@@ -41,7 +41,7 @@ export const SUFFICIENCY_THRESHOLDS = {
   adequateUsableExcerpts: 8,
   /** DOCUMENTED (`high` confidence rule of dr_refresh_clusters): at least this many discussions ... */
   highConfidenceDiscussions: 10,
-  /** ... across at least this many sources. Used only to word the reason when stored confidence is not `high`. */
+  /** ... across at least this many sources. Both are checked directly: "adequate" never rests on the stored `high` word alone. */
   highConfidenceSources: 2,
 } as const;
 

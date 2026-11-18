@@ -103,6 +103,94 @@ test('every reason carries a fixed code and the fixed message for that code', ()
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// The stored `high` is not trusted by itself: "adequate" needs unique_discussions >= 10 AND source_count >= 2 AND 8 excerpts
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const codes = (over: Partial<SufficiencyInput>) => evalWith(over).reasons.map((r) => r.code);
+
+test('review case 1: stored high, 5 discussions, 2 sources, 8 excerpts is limited, not adequate', () => {
+  const r = evaluateSufficiency({ confidence: 'high', unique_discussions: 5, source_count: 2, usable_excerpts: 8 });
+  assert.equal(r.level, 'limited');
+  assert.deepEqual(r.reasons, [{ code: 'fewer_than_high_discussions', message: 'fewer than 10 independent discussions' }]);
+});
+
+test('review case 2: stored high, 10 discussions, 1 source, 8 excerpts is limited, not adequate', () => {
+  const r = evaluateSufficiency({ confidence: 'high', unique_discussions: 10, source_count: 1, usable_excerpts: 8 });
+  assert.equal(r.level, 'limited');
+  assert.deepEqual(r.reasons, [{ code: 'fewer_than_high_sources', message: 'fewer than 2 distinct sources' }]);
+});
+
+test('review case 3: stored high, 10 discussions, 2 sources, 8 excerpts is adequate, with no reasons', () => {
+  const r = evaluateSufficiency({ confidence: 'high', unique_discussions: 10, source_count: 2, usable_excerpts: 8 });
+  assert.deepEqual(r, { level: 'adequate', reasons: [] });
+});
+
+test('review case 4: stored medium, 10 discussions, 2 sources, 8 excerpts is limited (the stored confidence is not upgraded)', () => {
+  const r = evaluateSufficiency({ confidence: 'medium', unique_discussions: 10, source_count: 2, usable_excerpts: 8 });
+  assert.equal(r.level, 'limited');
+  assert.deepEqual(r.reasons, [{ code: 'confidence_not_high', message: 'cluster confidence is not high' }]);
+});
+
+test('the numeric conditions are checked at their boundaries: 9/10 discussions and 1/2 sources', () => {
+  assert.equal(evalWith({ unique_discussions: 9 }).level, 'limited');
+  assert.equal(evalWith({ unique_discussions: 10 }).level, 'adequate');
+  assert.equal(evalWith({ source_count: 1 }).level, 'limited');
+  assert.equal(evalWith({ source_count: 2 }).level, 'adequate');
+  assert.equal(evalWith({ source_count: 0 }).level, 'limited');
+});
+
+test('a stored high that fails both numbers reports both shortfalls, numbers first, then too few excerpts', () => {
+  assert.deepEqual(codes({ confidence: 'high', unique_discussions: 5, source_count: 1, usable_excerpts: 8 }), ['fewer_than_high_discussions', 'fewer_than_high_sources']);
+  assert.deepEqual(codes({ confidence: 'high', unique_discussions: 5, source_count: 1, usable_excerpts: 7 }), ['fewer_than_high_discussions', 'fewer_than_high_sources', 'fewer_than_adequate_excerpts']);
+  assert.deepEqual(codes({ confidence: 'high', unique_discussions: 5, source_count: 2, usable_excerpts: 7 }), ['fewer_than_high_discussions', 'fewer_than_adequate_excerpts']);
+});
+
+test('the reasons are the same whether the stored word says high or not: the numbers speak, the word is named only when the numbers agree with it', () => {
+  for (const confidence of ['low', 'medium', 'high'] as const) {
+    assert.deepEqual(codes({ confidence, unique_discussions: 5, source_count: 2 }), ['fewer_than_high_discussions'], confidence);
+    assert.deepEqual(codes({ confidence, unique_discussions: 10, source_count: 1 }), ['fewer_than_high_sources'], confidence);
+  }
+  assert.deepEqual(codes({ confidence: 'low', unique_discussions: 10, source_count: 2 }), ['confidence_not_high']);
+  assert.deepEqual(codes({ confidence: 'high', unique_discussions: 10, source_count: 2 }), []);
+});
+
+test('insufficient still comes first: a stored high with 3 discussions is insufficient, not limited', () => {
+  assert.equal(evalWith({ confidence: 'high', unique_discussions: 3, source_count: 2, usable_excerpts: 8 }).level, 'insufficient');
+});
+
+test('a stored high that meets both numbers still needs 8 usable excerpts', () => {
+  assert.deepEqual(codes({ confidence: 'high', unique_discussions: 10, source_count: 2, usable_excerpts: 7 }), ['fewer_than_adequate_excerpts']);
+  assert.equal(evalWith({ confidence: 'high', unique_discussions: 10, source_count: 2, usable_excerpts: 7 }).level, 'limited');
+});
+
+test('pipeline: the four review cases end to end - the stored confidence is shown unchanged (M05) and never repaired', () => {
+  const run = (confidence: 'low' | 'medium' | 'high', discussions: number, sources: number) =>
+    prepared(input(manyMembers(8), { confidence, unique_discussions: discussions, source_count: sources, sources: ['github', 'hackernews', 'stackexchange'].slice(0, Math.max(sources, 1)) }));
+
+  const c1 = run('high', 5, 2);
+  assert.equal(c1.sufficiency.level, 'limited');
+  assert.deepEqual(c1.summary.sufficiency_reasons, ['fewer than 10 independent discussions']);
+
+  const c2 = run('high', 10, 1);
+  assert.equal(c2.sufficiency.level, 'limited');
+  assert.deepEqual(c2.summary.sufficiency_reasons, ['fewer than 2 distinct sources']);
+
+  const c3 = run('high', 10, 2);
+  assert.equal(c3.sufficiency.level, 'adequate');
+  assert.deepEqual(c3.summary.sufficiency_reasons, []);
+
+  const c4 = run('medium', 10, 2);
+  assert.equal(c4.sufficiency.level, 'limited');
+  assert.deepEqual(c4.summary.sufficiency_reasons, ['cluster confidence is not high']);
+
+  // Nothing is repaired: M05, M01 and M02 carry the stored values exactly as given.
+  const m = (p: typeof c1, id: string) => p.pack.metrics.find((x) => x.id === id)?.value;
+  assert.deepEqual([m(c1, 'M05'), m(c1, 'M01'), m(c1, 'M02')], ['high', 5, 2]);
+  assert.deepEqual([m(c2, 'M05'), m(c2, 'M01'), m(c2, 'M02')], ['high', 10, 1]);
+  assert.deepEqual([m(c4, 'M05'), m(c4, 'M01'), m(c4, 'M02')], ['medium', 10, 2]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
 // Through the pipeline: usable excerpts are counted from the pack, the cluster values come from the cluster row
 // ---------------------------------------------------------------------------------------------------------------------------------
 
@@ -151,7 +239,8 @@ test('the boundary cases are exercised end to end: 3/4 discussions, 2/3 excerpts
   const level = (discussions: number, excerpts: number, confidence: 'low' | 'medium' | 'high' = 'high') =>
     prepared(input(manyMembers(excerpts), { unique_discussions: discussions, confidence })).sufficiency.level;
   assert.equal(level(3, 10), 'insufficient');
-  assert.equal(level(4, 10), 'adequate');
+  assert.equal(level(4, 10), 'limited');     // 4 discussions clears "insufficient", but a stored `high` with 4 discussions is not adequate (needs 10)
+  assert.equal(level(10, 10), 'adequate');   // 10 discussions across the default 3 sources, high, 10 excerpts
   assert.equal(level(12, 2), 'insufficient');
   assert.equal(level(12, 3), 'limited');
   assert.equal(level(12, 7), 'limited');
