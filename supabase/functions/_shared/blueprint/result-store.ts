@@ -37,7 +37,7 @@ export class BlueprintResultStore {
       || !SHA256.test(identity.requestKeyHash)
       || !identity.model.endsWith(':free')
       || !identity.configVersion
-      || blueprint.meta.schema_version !== 'product-blueprint.v1'
+      || blueprint.meta.contract_version !== 'product-blueprint.v1'
       || !SHA256.test(blueprint.meta.evidence_pack.pack_sha256)) {
       throw new TypeError('invalid_blueprint_result');
     }
@@ -57,7 +57,7 @@ export class BlueprintResultStore {
         cluster_id: identity.clusterId,
         request_key_hash: identity.requestKeyHash,
         request_params: identity.requestParams,
-        schema_version: blueprint.meta.schema_version,
+        schema_version: blueprint.meta.contract_version,
         model: identity.model,
         config_version: identity.configVersion,
         evidence_pack_sha256: blueprint.meta.evidence_pack.pack_sha256,
