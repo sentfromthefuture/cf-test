@@ -3,7 +3,7 @@
 // build the backend-owned metadata, run verification, assemble ProductBlueprintV1, and call the
 // atomic result-store finalizer. No provider or database configuration is read from globals here.
 import { gateBlueprintRequest, type BlueprintRequestGateResult } from './request-gate.ts';
-import type { BlueprintQuotaRpc } from './quota.ts';
+import { releaseBlueprint, type BlueprintQuotaRpc } from './quota.ts';
 import type { BlueprintResultIdentity, BlueprintResultStore, StoredBlueprintResult } from './result-store.ts';
 import { runBlueprintStep, type BlueprintRuntimeInput, type BlueprintStepResult } from './runtime.ts';
 import type { AiCacheStore } from '../collector/ai-common.ts';
@@ -58,6 +58,11 @@ export async function runBlueprintLifecycle(input: BlueprintLifecycleInput): Pro
     reservationId: gate.reservationId,
     passes: step.passes,
   });
-  if (!stored) return { state: 'finalization_deferred', reason: 'assembly_rejected' };
+  if (!stored) {
+    // A definitive assembly rejection is terminal, unlike a transient provider/cache failure.
+    // Release the pending slot so it does not consume the user's daily capacity until expiry.
+    await releaseBlueprint(input.quotaRpc, gate.reservationId);
+    return { state: 'finalization_deferred', reason: 'assembly_rejected' };
+  }
   return { state: 'completed_now', result: stored, reused: false };
 }
