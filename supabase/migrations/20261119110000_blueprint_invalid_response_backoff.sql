@@ -18,7 +18,7 @@ BEGIN
   IF coalesce(p_reason, '') LIKE 'invalid_response:%' THEN
     v_retry := interval '1 minute';
   ELSE
-    v_retry := make_interval(hours => least(168, (2 ^ least((SELECT failed_attempts FROM public.dr_ai_cache WHERE id = p_id), 8))::integer));
+    v_retry := interval '1 hour';
   END IF;
 
   UPDATE public.dr_ai_cache
