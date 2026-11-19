@@ -14,11 +14,13 @@ AS $function$
 DECLARE
   n integer;
   v_retry interval;
+  v_attempts integer := 0;
 BEGIN
   IF coalesce(p_reason, '') LIKE 'invalid_response:%' THEN
     v_retry := interval '1 minute';
   ELSE
-    v_retry := interval '1 hour';
+    SELECT failed_attempts INTO v_attempts FROM public.dr_ai_cache WHERE id = p_id;
+    v_retry := make_interval(hours => least(168, (2 ^ least(coalesce(v_attempts, 0), 8))::integer));
   END IF;
 
   UPDATE public.dr_ai_cache
