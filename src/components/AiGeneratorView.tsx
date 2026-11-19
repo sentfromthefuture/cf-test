@@ -49,9 +49,17 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
     try {
       const { data: auth } = await supabase.auth.getSession();
       if (!auth.session) throw new Error('Please sign in before generating a Blueprint.');
-      const requestKey = blueprintRequestKeyRef.current || globalThis.crypto?.randomUUID?.();
+      // Keep the same idempotency key if the page reloads or the polling window expires.
+      // Otherwise each retry creates a new quota reservation and strands the prior in-progress run.
+      const storageKey = 'dr.blueprint.request.' + clusterId;
+      let requestKey = blueprintRequestKeyRef.current;
+      if (!requestKey) {
+        try { requestKey = window.sessionStorage.getItem(storageKey) || null; } catch { /* storage may be unavailable */ }
+      }
+      if (!requestKey) requestKey = globalThis.crypto?.randomUUID?.() || null;
       if (!requestKey) throw new Error('Secure request IDs are not supported by this browser.');
       blueprintRequestKeyRef.current = requestKey;
+      try { window.sessionStorage.setItem(storageKey, requestKey); } catch { /* in-memory retry still works */ }
       // Values must match the backend-owned Blueprint v1 enums in _shared/blueprint/constants.ts.
       const params = {
         team_size: 'solo',
@@ -83,6 +91,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
         if (data?.status === 'completed' || data?.status === 'completed_now') {
           setBlueprint(data.result);
           blueprintRequestKeyRef.current = null;
+          try { window.sessionStorage.removeItem('dr.blueprint.request.' + clusterId); } catch { /* ignore unavailable storage */ }
           setBlueprintStatus('Blueprint completed and verified.');
           return;
         }
@@ -93,7 +102,9 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
         }
         throw new Error(data?.error || data?.status || 'Blueprint generation did not complete.');
       }
-      throw new Error('Blueprint is taking longer than expected. Please retry.');
+      // Do not clear the idempotency key here: the next click must resume the same
+      // reservation/cache chain rather than consume another pending quota slot.
+      throw new Error('Blueprint is taking longer than expected. Your progress is saved; retry to resume.');
     } catch (err: any) {
       setBlueprintError(err?.message || 'Blueprint generation failed.');
     } finally {
