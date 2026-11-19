@@ -73,8 +73,8 @@ const optionalNonNegativeNumber = (v: unknown): number | null =>
 
 /** Parse a JSON object even when a model wraps it in a markdown fence or short preamble. */
 function extractJsonObject(content: string): Record<string, unknown> | null {
-  const cleaned = content.replace(/<think>[\\s\\S]*?<\\/think>/gi, '').trim()
-    .replace(/^\\s*```(?:json)?\\s*/i, '').replace(/\\s*```\\s*$/, '').trim();
+  const cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+    .replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   try {
     const parsed: unknown = JSON.parse(cleaned);
     return isObject(parsed) ? parsed : null;
@@ -86,7 +86,7 @@ function extractJsonObject(content: string): Record<string, unknown> | null {
     const ch = cleaned[i];
     if (inString) {
       if (escaped) escaped = false;
-      else if (ch === '\\\\') escaped = true;
+      else if (ch === '\\') escaped = true;
       else if (ch === '"') inString = false;
       continue;
     }
