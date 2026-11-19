@@ -75,7 +75,11 @@ export function classifyAiFailure(e: unknown): AiCallError {
   // Preserve its enum code and HTTP status instead of collapsing it into a generic
   // unavailable error. Structural checks avoid a cross-module import cycle.
   if (typeof e === 'object' && e !== null) {
-    const providerError = e as { name?: unknown; code?: unknown; httpStatus?: unknown };
+    const providerError = e as {
+      name?: unknown; code?: unknown; httpStatus?: unknown; reason?: unknown;
+      finishReason?: unknown; contentChars?: unknown; reasoningChars?: unknown;
+      promptTokens?: unknown; completionTokens?: unknown;
+    };
     if (providerError.name === 'BlueprintProviderError' && typeof providerError.code === 'string') {
       const status = typeof providerError.httpStatus === 'number' ? providerError.httpStatus : null;
       const code = providerError.code;
@@ -87,7 +91,22 @@ export function classifyAiFailure(e: unknown): AiCallError {
       if (status === 402) return new AiCallError(code, 'quota', status);
       if (status === 404) return new AiCallError(code, 'not_found', status);
       if (code === 'invalid_response' || code === 'truncated_response') {
-        return new AiCallError(code, 'invalid_response', status);
+        const allowedReasons = new Set([
+          'response_not_json', 'no_choices', 'empty_content', 'reasoning_exhausted_budget',
+          'truncated_json', 'no_json', 'not_an_object', 'provider_error', 'content_filtered',
+        ]);
+        const reason = typeof providerError.reason === 'string' && allowedReasons.has(providerError.reason)
+          ? providerError.reason as AiFailureReason : undefined;
+        const detail: AiFailureDetail = {
+          ...(reason ? { reason } : {}),
+          ...(typeof providerError.finishReason === 'string' ? { finishReason: providerError.finishReason } : {}),
+          ...(typeof providerError.contentChars === 'number' ? { contentChars: providerError.contentChars } : {}),
+          ...(typeof providerError.reasoningChars === 'number' ? { reasoningChars: providerError.reasoningChars } : {}),
+          ...(typeof providerError.promptTokens === 'number' ? { promptTokens: providerError.promptTokens } : {}),
+          ...(typeof providerError.completionTokens === 'number' ? { completionTokens: providerError.completionTokens } : {}),
+          ...(status !== null ? { httpStatus: status } : {}),
+        };
+        return new AiCallError(code, 'invalid_response', status, detail);
       }
       if (status === 400 || status === 413 || status === 422) return new AiCallError(code, 'bad_request', status);
       return new AiCallError(code, 'unavailable', status);
