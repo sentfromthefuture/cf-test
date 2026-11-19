@@ -41,10 +41,21 @@ export type BlueprintProviderErrorCode =
   | 'invalid_response'
   | 'truncated_response';
 
+export type BlueprintProviderFailureReason =
+  | 'response_not_json' | 'no_choices' | 'empty_content'
+  | 'reasoning_exhausted_budget' | 'truncated_json' | 'no_json'
+  | 'not_an_object' | 'provider_error' | 'content_filtered';
+
 export class BlueprintProviderError extends Error {
   constructor(
     public readonly code: BlueprintProviderErrorCode,
     public readonly httpStatus: number | null = null,
+    public readonly reason: BlueprintProviderFailureReason | null = null,
+    public readonly finishReason: string | null = null,
+    public readonly contentChars: number | null = null,
+    public readonly reasoningChars: number | null = null,
+    public readonly promptTokens: number | null = null,
+    public readonly completionTokens: number | null = null,
   ) {
     super(code);
     this.name = 'BlueprintProviderError';
@@ -138,28 +149,59 @@ export async function callBlueprintProvider(
 
   if (!isObject(raw)) throw new BlueprintProviderError('invalid_response', response.status);
   if (raw.error !== undefined && raw.error !== null) throw new BlueprintProviderError('provider_error', response.status);
+  const usage = isObject(raw.usage) ? raw.usage : {};
+  const completionDetails = isObject(usage.completion_tokens_details) ? usage.completion_tokens_details : {};
+  const promptTokens = nonNegativeInteger(usage.prompt_tokens);
+  const completionTokens = nonNegativeInteger(usage.completion_tokens);
+  const reasoningTokens = nonNegativeInteger(completionDetails.reasoning_tokens);
+  const model = typeof raw.model === 'string' ? raw.model.slice(0, 120) : null;
+  const provider = typeof raw.provider === 'string' ? raw.provider.slice(0, 80) : null;
   if (!Array.isArray(raw.choices) || !isObject(raw.choices[0])) {
-    throw new BlueprintProviderError('invalid_response', response.status);
+    throw new BlueprintProviderError('invalid_response', response.status, 'no_choices', null, null, null, promptTokens, completionTokens);
   }
 
   const choice = raw.choices[0];
-  if (choice.finish_reason === 'length') throw new BlueprintProviderError('truncated_response', response.status);
-  if (choice.finish_reason === 'content_filter' || choice.finish_reason === 'error') {
-    throw new BlueprintProviderError('provider_error', response.status);
+  const finish = typeof choice.finish_reason === 'string' ? choice.finish_reason : null;
+  if (finish === 'length') {
+    const msg = isObject(choice.message) ? choice.message : {};
+    const content = typeof msg.content === 'string' ? msg.content : '';
+    const reasoning = typeof msg.reasoning === 'string' ? msg.reasoning : '';
+    const reason = !content.trim() && (reasoning.length > 0 || reasoningTokens > 0)
+      ? 'reasoning_exhausted_budget' : 'truncated_json';
+    throw new BlueprintProviderError('truncated_response', response.status, reason, finish, content.length, reasoning.length, promptTokens, completionTokens);
   }
-  if (!isObject(choice.message) || typeof choice.message.content !== 'string' || !choice.message.content.trim()) {
-    throw new BlueprintProviderError('invalid_response', response.status);
+  if (finish === 'content_filter') {
+    throw new BlueprintProviderError('provider_error', response.status, 'content_filtered', finish, null, null, promptTokens, completionTokens);
+  }
+  if (finish === 'error') {
+    throw new BlueprintProviderError('provider_error', response.status, 'provider_error', finish, null, null, promptTokens, completionTokens);
+  }
+  if (!isObject(choice.message)) {
+    throw new BlueprintProviderError('invalid_response', response.status, 'empty_content', finish, null, null, promptTokens, completionTokens);
+  }
+  const content = choice.message.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    const chars = typeof content === 'string' ? content.length : null;
+    const type = content === null ? 'null' : typeof content;
+    const reason = type === 'null' && (typeof choice.message.reasoning === 'string' || reasoningTokens > 0)
+      ? 'reasoning_exhausted_budget' : 'empty_content';
+    throw new BlueprintProviderError('invalid_response', response.status, reason, finish, chars,
+      typeof choice.message.reasoning === 'string' ? choice.message.reasoning.length : null, promptTokens, completionTokens);
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(choice.message.content);
+    parsed = JSON.parse(content);
   } catch {
-    throw new BlueprintProviderError('invalid_response', response.status);
+    // Do not expose model text. Record only its length and whether it appears to contain a JSON object.
+    const looksLikeJson = content.trim().startsWith('{') || content.includes('{');
+    throw new BlueprintProviderError('invalid_response', response.status, looksLikeJson ? 'truncated_json' : 'no_json',
+      finish, content.length, null, promptTokens, completionTokens);
   }
-  if (!isObject(parsed)) throw new BlueprintProviderError('invalid_response', response.status);
+  if (!isObject(parsed)) throw new BlueprintProviderError('invalid_response', response.status, 'not_an_object',
+    finish, content.length, null, promptTokens, completionTokens);
 
-  const usage = isObject(raw.usage) ? raw.usage : {};
+
   const details = isObject(usage.completion_tokens_details) ? usage.completion_tokens_details : {};
   const cost = optionalNonNegativeNumber(usage.cost);
   return {
