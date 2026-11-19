@@ -283,9 +283,12 @@ export async function cachedCompute<T>(
       c = await compute();
     } catch (e) {
       const err = classifyAiFailure(e);
-      if (err.systemic) await store.aiCacheAbandon(lease).catch(() => undefined);
-      else const failureCode = err.detail?.reason ? `${err.kind}:${err.detail.reason}` : err.kind;
-      await store.aiCacheFail(lease, failureCode).catch(() => undefined);
+      if (err.systemic) {
+        await store.aiCacheAbandon(lease).catch(() => undefined);
+      } else {
+        const failureCode = err.detail?.reason ? `${err.kind}:${err.detail.reason}` : err.kind;
+        await store.aiCacheFail(lease, failureCode).catch(() => undefined);
+      }
       throw err;
     }
     let stored = false;
