@@ -71,6 +71,28 @@ export class AiCallError extends Error {
 /** Maps anything thrown by the HTTP client or a parser to an AiCallError. Unknown errors are treated as systemic (the cautious choice). */
 export function classifyAiFailure(e: unknown): AiCallError {
   if (e instanceof AiCallError) return e;
+  // BlueprintProviderError is intentionally a small provider-boundary error type.
+  // Preserve its enum code and HTTP status instead of collapsing it into a generic
+  // unavailable error. Structural checks avoid a cross-module import cycle.
+  if (typeof e === 'object' && e !== null) {
+    const providerError = e as { name?: unknown; code?: unknown; httpStatus?: unknown };
+    if (providerError.name === 'BlueprintProviderError' && typeof providerError.code === 'string') {
+      const status = typeof providerError.httpStatus === 'number' ? providerError.httpStatus : null;
+      const code = providerError.code;
+      if (code === 'rate_limited' || status === 429) return new AiCallError(code, 'rate_limited', status ?? 429);
+      if (code === 'timeout') return new AiCallError(code, 'timeout', status);
+      if (code === 'network') return new AiCallError(code, 'network', status);
+      if (code === 'provider_unavailable' || (status !== null && status >= 500)) return new AiCallError(code, 'unavailable', status);
+      if (status === 401 || status === 403) return new AiCallError(code, 'auth', status);
+      if (status === 402) return new AiCallError(code, 'quota', status);
+      if (status === 404) return new AiCallError(code, 'not_found', status);
+      if (code === 'invalid_response' || code === 'truncated_response') {
+        return new AiCallError(code, 'invalid_response', status);
+      }
+      if (status === 400 || status === 413 || status === 422) return new AiCallError(code, 'bad_request', status);
+      return new AiCallError(code, 'unavailable', status);
+    }
+  }
   const msg = safeError(e);
   if (e instanceof RateLimitError) return new AiCallError(msg, 'rate_limited', 429);
   if (e instanceof HttpError) {
