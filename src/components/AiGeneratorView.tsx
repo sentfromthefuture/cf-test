@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   Sparkles, 
   Send, 
@@ -39,6 +39,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
   const [blueprintStatus, setBlueprintStatus] = useState('');
   const [blueprintError, setBlueprintError] = useState<string | null>(null);
   const [blueprintLoading, setBlueprintLoading] = useState(false);
+  const blueprintRequestKeyRef = useRef<string | null>(null);
   const generateBlueprint = async () => {
     if (!clusterId) { setBlueprintError('Select a real collected opportunity first.'); return; }
     setBlueprintLoading(true);
@@ -48,8 +49,9 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
     try {
       const { data: auth } = await supabase.auth.getSession();
       if (!auth.session) throw new Error('Please sign in before generating a Blueprint.');
-      const requestKey = globalThis.crypto?.randomUUID?.();
+      const requestKey = blueprintRequestKeyRef.current || globalThis.crypto?.randomUUID?.();
       if (!requestKey) throw new Error('Secure request IDs are not supported by this browser.');
+      blueprintRequestKeyRef.current = requestKey;
       // Values must match the backend-owned Blueprint v1 enums in _shared/blueprint/constants.ts.
       const params = {
         team_size: 'solo',
@@ -80,6 +82,7 @@ export const AiGeneratorView: React.FC<{ activePlan: string; onOpenPricing: () =
         }
         if (data?.status === 'completed' || data?.status === 'completed_now') {
           setBlueprint(data.result);
+          blueprintRequestKeyRef.current = null;
           setBlueprintStatus('Blueprint completed and verified.');
           return;
         }

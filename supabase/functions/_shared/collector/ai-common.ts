@@ -223,7 +223,7 @@ export type CachedOutcome<T> =
    */
   | { status: 'computed'; value: T; cacheId: string; stored: boolean; notStored?: 'write_failed' | 'lease_lost' }
   | { status: 'busy'; cacheId: string | null }
-  | { status: 'cooldown'; cacheId: string | null }
+  | { status: 'cooldown'; cacheId: string | null; retryAfterSeconds?: number }
   /** A cache MISS that the caller's gate refused to turn into a live request. The lease was released; nothing was recorded against the input. */
   | { status: 'deferred'; cacheId: string | null; reason: string };
 
@@ -269,7 +269,7 @@ export async function cachedCompute<T>(
     }
     if (b.state === 'storage_backoff') return { status: 'deferred', cacheId: null, reason: 'cache storage backoff' };
     if (b.state === 'busy') return { status: 'busy', cacheId: b.id ?? null };
-    if (b.state === 'cooldown') return { status: 'cooldown', cacheId: b.id ?? null };
+    if (b.state === 'cooldown') { const ms = b.retry_after ? Date.parse(b.retry_after) - Date.now() : 15_000; return { status: 'cooldown', cacheId: b.id ?? null, retryAfterSeconds: Math.max(2, Math.min(3600, Math.ceil(ms / 1000))) }; }
 
     const lease: AiLease = { id: b.id, epoch: b.epoch };
     const refusal = o.gate?.() ?? null;
@@ -283,8 +283,12 @@ export async function cachedCompute<T>(
       c = await compute();
     } catch (e) {
       const err = classifyAiFailure(e);
-      if (err.systemic) await store.aiCacheAbandon(lease).catch(() => undefined);
-      else await store.aiCacheFail(lease, err.kind).catch(() => undefined);
+      if (err.systemic) {
+        await store.aiCacheAbandon(lease).catch(() => undefined);
+      } else {
+        const failureCode = err.detail?.reason ? `${err.kind}:${err.detail.reason}` : err.kind;
+        await store.aiCacheFail(lease, failureCode).catch(() => undefined);
+      }
       throw err;
     }
     let stored = false;

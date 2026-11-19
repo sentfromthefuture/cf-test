@@ -276,7 +276,7 @@ Deno.serve(async (req) => {
         status: step.state,
         pass: step.pass,
         ...(step.reason ? { reason: step.reason } : {}),
-        retry_after_seconds: step.state === 'busy' ? 3 : step.state === 'cooldown' ? 15 : 30,
+        retry_after_seconds: step.state === 'busy' ? 3 : step.state === 'cooldown' ? (step.retry_after_seconds ?? 15) : 30,
       }, step.state === 'deferred' ? 503 : 202);
     }
     return deny(req, 'blueprint_unexpected_state', 500);

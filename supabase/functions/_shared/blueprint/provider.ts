@@ -71,6 +71,37 @@ const nonNegativeInteger = (v: unknown): number =>
 const optionalNonNegativeNumber = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 
+/** Parse a JSON object even when a model wraps it in a markdown fence or short preamble. */
+function extractJsonObject(content: string): Record<string, unknown> | null {
+  const cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+    .replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  try {
+    const parsed: unknown = JSON.parse(cleaned);
+    return isObject(parsed) ? parsed : null;
+  } catch { /* scan for a complete outer object below */ }
+  const start = cleaned.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0, inString = false, escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      try {
+        const parsed: unknown = JSON.parse(cleaned.slice(start, i + 1));
+        return isObject(parsed) ? parsed : null;
+      } catch { return null; }
+    }
+  }
+  return null;
+}
+
 /** Validate at the boundary. No paid model slug or provider fallback is ever accepted. */
 export function blueprintProviderConfigProblem(config: BlueprintProviderConfig): string | null {
   if (!config.apiKey.trim()) return 'OPENROUTER_API_KEY is not set';
@@ -189,17 +220,13 @@ export async function callBlueprintProvider(
       typeof choice.message.reasoning === 'string' ? choice.message.reasoning.length : null, promptTokens, completionTokens);
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
+  const parsed = extractJsonObject(content);
+  if (!parsed) {
     // Do not expose model text. Record only its length and whether it appears to contain a JSON object.
     const looksLikeJson = content.trim().startsWith('{') || content.includes('{');
     throw new BlueprintProviderError('invalid_response', response.status, looksLikeJson ? 'truncated_json' : 'no_json',
       finish, content.length, null, promptTokens, completionTokens);
   }
-  if (!isObject(parsed)) throw new BlueprintProviderError('invalid_response', response.status, 'not_an_object',
-    finish, content.length, null, promptTokens, completionTokens);
 
 
   const details = isObject(usage.completion_tokens_details) ? usage.completion_tokens_details : {};
