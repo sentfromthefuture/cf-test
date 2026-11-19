@@ -10,7 +10,7 @@ import { runBlueprintPass, type BlueprintPass } from './pipeline.ts';
 import type { BlueprintProviderConfig, BlueprintProviderUsage } from './provider.ts';
 import { validateBlueprintPassOutput } from './validate.ts';
 
-export const BLUEPRINT_CONFIG_VERSION = 'bp1.p1.s1';
+export const BLUEPRINT_CONFIG_VERSION = 'bp1.p2.s1';
 
 export type StoredPassOutput = PassAOutput | PassBOutput | PassCOutput;
 export interface BlueprintRuntimeInput {
@@ -25,7 +25,7 @@ export interface BlueprintPasses {
 }
 export type BlueprintStepResult =
   | { state: 'pass_completed'; completed: BlueprintPass; next: 'B' | 'C' | 'assemble'; from_cache: boolean; passes: BlueprintPasses; passRecords: PassRecord[]; cache_id: string; input_hash: string }
-  | { state: 'busy' | 'cooldown' | 'deferred'; pass: BlueprintPass; reason?: string; passes: BlueprintPasses }
+  | { state: 'busy' | 'cooldown' | 'deferred'; pass: BlueprintPass; reason?: string; retry_after_seconds?: number; passes: BlueprintPasses }
   | { state: 'ready_to_assemble'; passes: BlueprintPasses; passRecords: PassRecord[] };
 
 const PASS_ORDER: readonly BlueprintPass[] = ['A', 'B', 'C'];
@@ -120,7 +120,7 @@ export async function runBlueprintStep(
     );
 
     if (outcome.status === 'busy') return { state: 'busy', pass, passes };
-    if (outcome.status === 'cooldown') return { state: 'cooldown', pass, passes };
+    if (outcome.status === 'cooldown') return { state: 'cooldown', pass, retry_after_seconds: outcome.retryAfterSeconds, reason: 'provider_input_backoff', passes };
     if (outcome.status === 'deferred') return { state: 'deferred', pass, reason: outcome.reason, passes };
 
     const output = asPass(pass, outcome.value);
