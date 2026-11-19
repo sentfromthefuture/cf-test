@@ -289,10 +289,30 @@ Deno.serve(async (req) => {
     // Emit only a stable error class and a strictly allow-listed code token. Never log
     // request/evidence text, provider bodies, headers, URLs, or credentials.
     const errorName = error instanceof Error ? error.name : 'UnknownError';
-    const rawMessage = error instanceof Error ? error.message : '';
-    const safeCodeMatch = rawMessage.match(/^([a-zA-Z][a-zA-Z0-9_:-]{0,79})$/);
-    const diagnostic = safeCodeMatch?.[1] ?? 'unclassified_internal_error';
-    console.error('blueprint_generation_failed', { error_name: errorName, diagnostic });
-    return reply(req, { error: 'blueprint_generation_unavailable', diagnostic, retryable: true }, 503);
+    // classifyAiFailure wraps provider failures in AiCallError. Read only its enum
+    // classification/status/detail fields; never expose its message or provider body.
+    const classified = typeof error === 'object' && error !== null
+      ? error as { kind?: unknown; status?: unknown; detail?: { reason?: unknown } }
+      : {};
+    const allowedKinds = new Set([
+      'rate_limited', 'unavailable', 'timeout', 'network', 'auth', 'quota',
+      'not_found', 'bad_request', 'invalid_response', 'refused',
+    ]);
+    const kind = typeof classified.kind === 'string' && allowedKinds.has(classified.kind)
+      ? classified.kind : null;
+    const status = typeof classified.status === 'number' && Number.isInteger(classified.status)
+      ? classified.status : null;
+    const reason = typeof classified.detail?.reason === 'string'
+      ? classified.detail.reason : null;
+    const diagnostic = kind ?? 'unclassified_internal_error';
+    console.error('blueprint_generation_failed', {
+      error_name: errorName, diagnostic, provider_http_status: status, failure_reason: reason,
+    });
+    return reply(req, {
+      error: 'blueprint_generation_unavailable', diagnostic,
+      ...(status !== null ? { provider_http_status: status } : {}),
+      ...(reason ? { failure_reason: reason } : {}),
+      retryable: true,
+    }, 503);
   }
 });
